@@ -223,7 +223,8 @@ public class Flags {
               + "Value can be literal or variable: {CALLING_AET}, {CALLED_AET}, {TIMESTAMP}. "
               + "Can be specified multiple times. "
               + "User must manually register Private Creator tag (e.g., (0777,0010):LO:PRAXIUM) "
-              + "according to DICOM standard before using private data elements.")
+              + "according to DICOM standard before using private data elements.",
+      splitter = com.beust.jcommander.converters.NoParameterSplitter.class)
   List<String> addPrivateTags = new ArrayList<>();
 
   public Flags() {
