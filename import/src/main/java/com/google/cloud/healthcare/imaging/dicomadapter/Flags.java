@@ -16,11 +16,24 @@ package com.google.cloud.healthcare.imaging.dicomadapter;
 
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.Parameters;
+import com.beust.jcommander.converters.IParameterSplitter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 @Parameters(separators = "= ")
 public class Flags {
+
+  /**
+   * Custom parameter splitter that doesn't split values.
+   * Used to prevent JCommander from splitting values containing commas.
+   */
+  public static class NoSplitter implements IParameterSplitter {
+    @Override
+    public List<String> split(String value) {
+      return Arrays.asList(value);
+    }
+  }
 
   @Parameter(
       names = {"--dimse_aet"},
@@ -224,7 +237,8 @@ public class Flags {
               + "Can be specified multiple times. "
               + "User must manually register Private Creator tag (e.g., (0777,0010):LO:PRAXIUM) "
               + "according to DICOM standard before using private data elements.",
-      variableArity = true)
+      variableArity = true,
+      splitter = NoSplitter.class)
   List<String> addPrivateTags = new ArrayList<>();
 
   public Flags() {
