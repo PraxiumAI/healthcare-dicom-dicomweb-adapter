@@ -29,16 +29,22 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorCompletionService;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
 import org.dcm4che3.data.VR;
 import org.dcm4che3.imageio.codec.Transcoder;
+import org.dcm4che3.io.DicomInputStream;
+import org.dcm4che3.io.DicomOutputStream;
 import org.dcm4che3.net.Association;
 import org.dcm4che3.net.PDVInputStream;
 import org.dcm4che3.net.Status;
@@ -56,22 +62,31 @@ public class CStoreService extends BasicCStoreSCP {
 
   private static Logger log = LoggerFactory.getLogger(CStoreService.class);
 
+  private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{([A-Z_]+)\\}");
+
   private final IDestinationClientFactory destinationClientFactory;
   private final IMultipleDestinationUploadService multipleSendService;
   private final DicomRedactor redactor;
   private final String transcodeToSyntax;
+  private final List<ImportAdapter.PrivateTagConfig> privateTagConfigs;
 
   CStoreService(IDestinationClientFactory destinationClientFactory,
                 DicomRedactor redactor,
                 String transcodeToSyntax,
-                IMultipleDestinationUploadService multipleSendService) {
+                IMultipleDestinationUploadService multipleSendService,
+                List<ImportAdapter.PrivateTagConfig> privateTagConfigs) {
     this.destinationClientFactory = destinationClientFactory;
     this.redactor = redactor;
     this.transcodeToSyntax = transcodeToSyntax != null && transcodeToSyntax.length() > 0 ? transcodeToSyntax : null;
     this.multipleSendService = multipleSendService;
+    this.privateTagConfigs = privateTagConfigs != null ? privateTagConfigs : new ArrayList<>();
 
     if(this.transcodeToSyntax != null) {
       log.info("Transcoding to: " + transcodeToSyntax);
+    }
+
+    if(!this.privateTagConfigs.isEmpty()) {
+      log.info("Private tags configured: " + this.privateTagConfigs.size() + " tags will be added during C-STORE");
     }
   }
 
@@ -99,10 +114,20 @@ public class CStoreService extends BasicCStoreSCP {
       final CountingInputStream countingStream = destinationHolder.getCountingInputStream();
 
       List<StreamProcessor> processorList = new ArrayList<>();
+
+      // 1. Redaction (if configured)
       if (redactor != null) {
         processorList.add(redactor::redact);
       }
 
+      // 2. Add private tags (if configured)
+      if (!privateTagConfigs.isEmpty()) {
+        processorList.add((inputStream, outputStream) ->
+          addPrivateTags(inputStream, outputStream, association, transferSyntax)
+        );
+      }
+
+      // 3. Transcoding (if needed)
       if(transcodeToSyntax != null && !transcodeToSyntax.equals(transferSyntax)) {
         processorList.add((inputStream, outputStream) -> {
           try (Transcoder transcoder = new Transcoder(inputStream)) {
@@ -173,6 +198,94 @@ public class CStoreService extends BasicCStoreSCP {
   private void validateParam(String value, String name) throws DicomServiceException {
     if (value == null || value.trim().length() == 0) {
       throw new DicomServiceException(Status.CannotUnderstand, "Mandatory tag empty: " + name);
+    }
+  }
+
+  /**
+   * Resolves variable placeholders in a template string.
+   *
+   * @param template String potentially containing {VARIABLE} placeholders
+   * @param association DICOM association for extracting runtime values
+   * @return Resolved string with all variables replaced
+   */
+  private String resolveVariables(String template, Association association) {
+    if (!template.contains("{")) {
+      return template; // No variables to resolve
+    }
+
+    Matcher matcher = VARIABLE_PATTERN.matcher(template);
+    StringBuffer result = new StringBuffer();
+
+    while (matcher.find()) {
+      String varName = matcher.group(1);
+      String value = resolveVariable(varName, association);
+      matcher.appendReplacement(result, Matcher.quoteReplacement(value));
+    }
+    matcher.appendTail(result);
+
+    return result.toString();
+  }
+
+  /**
+   * Resolves a single variable to its runtime value.
+   *
+   * @param varName Variable name (e.g., "CALLING_AET")
+   * @param association DICOM association
+   * @return Resolved value
+   * @throws IllegalArgumentException if variable is unknown
+   */
+  private String resolveVariable(String varName, Association association) {
+    switch (varName) {
+      case "CALLING_AET":
+        return association.getAAssociateAC().getCallingAET();
+      case "CALLED_AET":
+        return association.getAAssociateAC().getCalledAET();
+      case "TIMESTAMP":
+        return new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+      default:
+        throw new IllegalArgumentException("Unknown variable: " + varName);
+    }
+  }
+
+  /**
+   * Adds configured private tags to the DICOM dataset.
+   *
+   * @param inputStream Input DICOM stream
+   * @param outputStream Output DICOM stream with added tags
+   * @param association DICOM association for variable resolution
+   * @param transferSyntax Transfer syntax for output
+   * @throws IOException if reading/writing fails
+   */
+  private void addPrivateTags(
+      InputStream inputStream,
+      OutputStream outputStream,
+      Association association,
+      String transferSyntax) throws IOException {
+
+    if (privateTagConfigs.isEmpty()) {
+      // No tags to add, just copy through
+      StreamUtils.copy(inputStream, outputStream);
+      return;
+    }
+
+    DicomInputStream dis = new DicomInputStream(inputStream);
+    Attributes fmi = dis.readFileMetaInformation();
+    Attributes dataset = dis.readDataset(-1, -1);
+
+    // Add all configured private tags
+    for (ImportAdapter.PrivateTagConfig config : privateTagConfigs) {
+      try {
+        String value = resolveVariables(config.getValueTemplate(), association);
+        dataset.setString(config.getTag(), config.getVr(), value);
+      } catch (Exception e) {
+        log.error("Failed to add private tag (0x" + Integer.toHexString(config.getTag()) + "): " + e.getMessage());
+        throw new IOException("Failed to add private tag: " + e.getMessage(), e);
+      }
+    }
+
+    // Write modified DICOM
+    try (DicomOutputStream dos = new DicomOutputStream(outputStream, transferSyntax)) {
+      dos.writeDataset(fmi, dataset);
     }
   }
 

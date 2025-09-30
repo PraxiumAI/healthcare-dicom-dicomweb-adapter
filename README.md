@@ -11,6 +11,7 @@ Table of Contents
       * [Export Adapter](#export-adapter)
       * [Stackdriver Monitoring](#stackdriver-monitoring)
       * [DICOM Redactor](#dicom-redactor)
+      * [Private Tags](#private-tags)
       * [Deployment using Kubernetes](#deployment-using-kubernetes)
          * [Requirements](#requirements)
          * [Deploying Docker Images to GKE](#deploying-docker-images-to-gke)
@@ -26,17 +27,17 @@ Table of Contents
 The Import Adapter converts incoming DIMSE requests to corresponding DICOMWeb requests and passes the converted results back to the DIMSE client. The following requests are supported:
 - C-STORE to STOW-RS
 - C-FIND to QIDO-RS
-- C-MOVE uses QIDO-RS to determine which instances to transfer, then for each instance executes a 
+- C-MOVE uses QIDO-RS to determine which instances to transfer, then for each instance executes a
 WADO-RS request to fetch the instance and a C-STORE request to transfer it to the C-MOVE destination
 - Storage commitment service to QIDO-RS
 
 Note that any C-FIND query on the ModalitiesInStudy tag will result in 1 QIDO-RS query per modality.
 
-Available AET destinations for the C-MOVE and storage commitment services are configured via an AET dictionary json file, 
-which can be specified either by using the "--aet_dictionary" command line parameter or 
+Available AET destinations for the C-MOVE and storage commitment services are configured via an AET dictionary json file,
+which can be specified either by using the "--aet_dictionary" command line parameter or
 specifying the "ENV_AETS_JSON" environment variable.
 
-The following configuration needs to be added to the dicom-adapter.yaml file to use CMOVE. 
+The following configuration needs to be added to the dicom-adapter.yaml file to use CMOVE.
 Please see the [Deployment using Kubernetes](#deployment-using-kubernetes) section for more information.
 ```yaml
 env:
@@ -51,13 +52,13 @@ Here is an example JSON dictionary:
 ```shell
 [
 	{
-		"name": "DEVICE_A", 
-		"host": "localhost", 
+		"name": "DEVICE_A",
+		"host": "localhost",
 		"port": 11113
 	},
 	{
-		"name": "DEVICE_B", 
-		"host": "192.168.0.1", 
+		"name": "DEVICE_B",
+		"host": "192.168.0.1",
 		"port": 11114
 	},
 	...
@@ -89,13 +90,13 @@ For the list of command line flags, see [here](export/src/main/java/com/google/c
 
 Both the Import and Export adapter include support for Stackdriver Monitoring.
 It is enabled by specifying the --monitoring_project_id parameter, which must be the same project in which the adapter is running.
-For the list of events logged to Stackdriver for the Export Adapter, see [here](export/src/main/java/com/google/cloud/healthcare/imaging/dicomadapter/monitoring/Event.java). 
+For the list of events logged to Stackdriver for the Export Adapter, see [here](export/src/main/java/com/google/cloud/healthcare/imaging/dicomadapter/monitoring/Event.java).
 For the list of events logged to Stackdriver for the Import Adapter, see [here](import/src/main/java/com/google/cloud/healthcare/imaging/dicomadapter/monitoring/Event.java).
 
 The monitored resource is configured as k8s_container, with values set from a combination of environment variables configured via Downward API (pod name, pod namespace and container name) and GCP Metadata (project id, cluster name and location). Defaults to the global resource, if k8s_container can't be configured.
 
-The following configuration needs to be added to the dicom-adapter.yaml file to configure the 
-stackdriver monitoring resource. Please see the [Deployment using Kubernetes](#deployment-using-kubernetes) section 
+The following configuration needs to be added to the dicom-adapter.yaml file to configure the
+stackdriver monitoring resource. Please see the [Deployment using Kubernetes](#deployment-using-kubernetes) section
 for more information.
 ```yaml
 env:
@@ -123,7 +124,70 @@ If enabled via one of the above options, the redactor also always regenerates th
 - StudyInstanceUID
 - SeriesInstanceUID
 - SOPInstanceUID
-- MediaStorageSOPInstanceUID 
+- MediaStorageSOPInstanceUID
+
+## Private Tags
+
+The Import Adapter supports adding custom private DICOM tags to instances during C-STORE upload. This feature allows you to embed additional metadata (such as the sender's identity or processing timestamps) directly into DICOM files.
+
+### Configuration
+
+Use the `--add_private_tag` flag (can be specified multiple times):
+
+```bash
+--add_private_tag="(gggg,eeee):VR:value"
+```
+
+### Format
+
+- **`(gggg,eeee)`** - DICOM tag in hexadecimal notation (group must be odd for private tags)
+- **`VR`** - Value Representation (e.g., `SH`, `LO`, `DT`)
+- **`value`** - Literal string or variable placeholder
+
+### Supported Variables
+
+- **`{CALLING_AET}`** - AE Title of the DICOM sender
+- **`{CALLED_AET}`** - AE Title of this adapter
+- **`{TIMESTAMP}`** - Current date/time in DICOM DT format (yyyyMMddHHmmss)
+
+### DICOM Standard Requirements
+
+According to the DICOM standard, private tags require a **Private Creator element**:
+
+- **Private Creator**: `(gggg,00PP)` with VR=LO containing your organization name
+- **Private Data**: `(gggg,PPEE)` where PP matches the Private Creator element number
+
+**Important**: You must manually register the Private Creator tag before using private data elements. The adapter does not create Private Creator elements automatically.
+
+### Example Usage
+
+```bash
+java -jar import-adapter.jar \
+  --dimse_aet=MY_AET \
+  --dimse_port=11112 \
+  --dicomweb_address=https://healthcare.googleapis.com/v1/projects/my-project/locations/us-central1/datasets/my-dataset/dicomStores/my-store/dicomWeb \
+  --add_private_tag="(0777,0010):LO:PRAXIUM" \
+  --add_private_tag="(0777,1000):SH:{CALLING_AET}" \
+  --add_private_tag="(0777,1001):DT:{TIMESTAMP}"
+```
+
+This configuration will add three tags to every uploaded DICOM instance:
+- **`(0777,0010)`** = `"PRAXIUM"` (Private Creator)
+- **`(0777,1000)`** = sender's AE Title (e.g., `"MY_PACS"`)
+- **`(0777,1001)`** = upload timestamp (e.g., `"20250930143022"`)
+
+### Validation
+
+- Tag format and VR are validated at adapter startup
+- Unknown variables will cause startup failure with a clear error message
+- Invalid tags during C-STORE will return `ProcessingFailure` status to the sender
+
+### Processing Order
+
+Private tags are added **after** DICOM Redaction (if configured) but **before** transcoding. This ensures:
+1. Redacted tags are not included in private tag values
+2. Private tags are preserved during transfer syntax conversion
+3. All processing errors are reported back to the sender
 
 ## Deployment using Kubernetes
 
@@ -243,7 +307,7 @@ Instructions on how to run the Import Adapter Docker image locally are available
 
 ## Deployment using Data Protection Toolkit
 
-The adapters can be deployed as a gke_workload using the [data protection toolkit](https://github.com/GoogleCloudPlatform/healthcare/tree/master/deploy). Sample configuration may be found in this [folder.](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/tree/master/samples) 
+The adapters can be deployed as a gke_workload using the [data protection toolkit](https://github.com/GoogleCloudPlatform/healthcare/tree/master/deploy). Sample configuration may be found in this [folder.](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/tree/master/samples)
 
 ## Building from source
 

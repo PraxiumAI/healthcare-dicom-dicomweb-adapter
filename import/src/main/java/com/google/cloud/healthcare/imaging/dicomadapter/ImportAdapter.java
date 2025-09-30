@@ -45,8 +45,14 @@ import com.google.cloud.healthcare.imaging.dicomadapter.monitoring.MonitoringSer
 import com.google.common.collect.ImmutableList;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.dcm4che3.data.VR;
 import org.dcm4che3.net.Device;
 import org.dcm4che3.net.service.BasicCEchoSCP;
 import org.dcm4che3.net.service.DicomServiceRegistry;
@@ -118,6 +124,8 @@ public class ImportAdapter {
 
     DicomRedactor redactor = configureRedactor(flags);
 
+    List<PrivateTagConfig> privateTagConfigs = validateAndParsePrivateTags(flags.addPrivateTags);
+
     BackupUploadService backupUploadService = configureBackupUploadService(flags, credentials);
 
     IDestinationClientFactory destinationClientFactory = configureDestinationClientFactory(
@@ -127,7 +135,7 @@ public class ImportAdapter {
         flags, cstoreSubAet, backupUploadService);
 
     CStoreService cStoreService =
-        new CStoreService(destinationClientFactory, redactor, flags.transcodeToSyntax, multipleDestinationSendService);
+        new CStoreService(destinationClientFactory, redactor, flags.transcodeToSyntax, multipleDestinationSendService, privateTagConfigs);
     serviceRegistry.addDicomService(cStoreService);
 
     // Handle C-FIND
@@ -286,6 +294,84 @@ public class ImportAdapter {
     return redactor;
   }
 
+  private static final Set<String> SUPPORTED_VARIABLES = new HashSet<>(
+      Arrays.asList("CALLING_AET", "CALLED_AET", "TIMESTAMP"));
+
+  private static final Pattern TAG_PATTERN = Pattern.compile(
+      "\\(([0-9A-Fa-f]{4}),([0-9A-Fa-f]{4})\\):([A-Z]{2}):(.*)");
+
+  private static final Pattern VARIABLE_PATTERN = Pattern.compile("\\{([A-Z_]+)\\}");
+
+  /**
+   * Validates and parses private tag configurations from command line flags.
+   *
+   * @param addPrivateTags List of tag specifications in format (gggg,eeee):VR:value
+   * @return List of validated PrivateTagConfig objects
+   * @throws IllegalArgumentException if validation fails
+   */
+  private static List<PrivateTagConfig> validateAndParsePrivateTags(List<String> addPrivateTags) {
+    List<PrivateTagConfig> configs = new ArrayList<>();
+
+    if (addPrivateTags == null || addPrivateTags.isEmpty()) {
+      return configs;
+    }
+
+    for (String tagSpec : addPrivateTags) {
+      Matcher matcher = TAG_PATTERN.matcher(tagSpec);
+
+      if (!matcher.matches()) {
+        System.err.println("ERROR: Invalid private tag format: " + tagSpec);
+        System.err.println("Expected format: (gggg,eeee):VR:value");
+        System.err.println("Example: (0777,1000):SH:{CALLING_AET}");
+        System.exit(1);
+      }
+
+      String groupHex = matcher.group(1);
+      String elementHex = matcher.group(2);
+      String vrString = matcher.group(3);
+      String value = matcher.group(4);
+
+      // Parse tag
+      int group = Integer.parseInt(groupHex, 16);
+      int element = Integer.parseInt(elementHex, 16);
+      int tag = (group << 16) | element;
+
+      // Validate group is odd (requirement for private tags)
+      if (group % 2 == 0) {
+        System.err.println("ERROR: Private tag group must be odd: " + tagSpec);
+        System.err.println("Group " + groupHex + " is even. Private tags require odd groups.");
+        System.exit(1);
+      }
+
+      // Validate VR
+      VR vr;
+      try {
+        vr = VR.valueOf(vrString);
+      } catch (IllegalArgumentException e) {
+        System.err.println("ERROR: Invalid VR in private tag: " + tagSpec);
+        System.err.println("VR '" + vrString + "' is not recognized.");
+        System.exit(1);
+        return null; // unreachable, but makes compiler happy
+      }
+
+      // Validate variables in value
+      Matcher varMatcher = VARIABLE_PATTERN.matcher(value);
+      while (varMatcher.find()) {
+        String varName = varMatcher.group(1);
+        if (!SUPPORTED_VARIABLES.contains(varName)) {
+          System.err.println("ERROR: Unknown variable {" + varName + "} in private tag: " + tagSpec);
+          System.err.println("Supported variables: {CALLING_AET}, {CALLED_AET}, {TIMESTAMP}");
+          System.exit(1);
+        }
+      }
+
+      configs.add(new PrivateTagConfig(tag, vr, value));
+      log.info("Registered private tag: " + tagSpec);
+    }
+
+    return configs;
+  }
+
   private static ImmutableList<Pair<DestinationFilter, IDicomWebClient>> configureDestinationMap(
     String destinationJsonInline,
     String destinationsJsonPath,
@@ -345,6 +431,33 @@ public class ImportAdapter {
       }
     }
     return new Pair(healthDestinationFiltersBuilder.build(), dicomDestinationFiltersBuilder.build());
+  }
+
+  /**
+   * Configuration for a private DICOM tag to be added during C-STORE processing.
+   */
+  public static class PrivateTagConfig {
+    private final int tag;
+    private final VR vr;
+    private final String valueTemplate;
+
+    public PrivateTagConfig(int tag, VR vr, String valueTemplate) {
+      this.tag = tag;
+      this.vr = vr;
+      this.valueTemplate = valueTemplate;
+    }
+
+    public int getTag() {
+      return tag;
+    }
+
+    public VR getVr() {
+      return vr;
+    }
+
+    public String getValueTemplate() {
+      return valueTemplate;
+    }
   }
 
   public static class Pair<A, D>{

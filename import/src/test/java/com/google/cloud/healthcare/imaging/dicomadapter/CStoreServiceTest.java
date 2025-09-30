@@ -44,6 +44,7 @@ import com.google.cloud.healthcare.util.TestUtils;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -154,7 +155,8 @@ public final class CStoreServiceTest {
             destinationClientFactory,
             null,
             transcodeToSyntax,
-            multipleDestinationSendService);
+            multipleDestinationSendService,
+            Collections.emptyList());
 
     serviceRegistry.addDicomService(cStoreService);
     Device serverDevice = DeviceUtil.createServerDevice(serverAET, serverPort, serviceRegistry);
