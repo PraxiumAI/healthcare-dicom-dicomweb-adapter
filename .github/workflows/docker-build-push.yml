@@ -1,0 +1,95 @@
+name: Build and Push DICOM Adapters to GHCR
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: praxiumai
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        adapter: [import, export]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v2
+        with:
+          gradle-version: '7.6'
+
+      - name: Build adapter with Gradle
+        run: |
+          cd ${{ matrix.adapter }}
+          gradle build --no-daemon
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        run: |
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/dicom-${{ matrix.adapter }}-adapter"
+          TAGS="${IMAGE_NAME}:latest"
+
+          # Add version tag if pushing a tag
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+            TAGS="${TAGS},${IMAGE_NAME}:${VERSION}"
+          fi
+
+          # Add sha tag
+          TAGS="${TAGS},${IMAGE_NAME}:sha-${GITHUB_SHA::7}"
+
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "image_name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image with Gradle
+        run: |
+          cd ${{ matrix.adapter }}
+          gradle dockerBuildImage \
+            -Pdocker_tag=${{ steps.meta.outputs.image_name }}:latest \
+            --no-daemon
+
+      - name: Tag and push Docker images
+        run: |
+          # Parse all tags and push
+          IFS=',' read -ra TAG_ARRAY <<< "${{ steps.meta.outputs.tags }}"
+          for TAG in "${TAG_ARRAY[@]}"; do
+            if [[ "$TAG" != "${{ steps.meta.outputs.image_name }}:latest" ]]; then
+              docker tag ${{ steps.meta.outputs.image_name }}:latest "$TAG"
+            fi
+            echo "Pushing $TAG"
+            docker push "$TAG"
+          done
+
+      - name: Image digest
+        run: |
+          docker images ${{ steps.meta.outputs.image_name }}
