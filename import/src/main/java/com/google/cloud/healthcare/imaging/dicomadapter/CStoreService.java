@@ -286,13 +286,22 @@ public class CStoreService extends BasicCStoreSCP {
     }
 
     // Write modified DICOM with proper transfer syntax handling
-    // Update FMI with the correct transfer syntax UID if needed
+    // Force Explicit VR Little Endian to preserve VR for private tags
+    // If original file was Implicit VR, convert to Explicit VR
+    // Otherwise keep original transfer syntax (e.g., compressed formats)
+    String finalTransferSyntax = transferSyntax;
+
+    if (UID.ImplicitVRLittleEndian.equals(transferSyntax)) {
+      // Convert Implicit VR to Explicit VR to preserve private tag VRs
+      finalTransferSyntax = UID.ExplicitVRLittleEndian;
+    }
+
+    // Update FMI with the final transfer syntax
     if (fmi != null) {
-      fmi.setString(Tag.TransferSyntaxUID, VR.UI, transferSyntax);
+      fmi.setString(Tag.TransferSyntaxUID, VR.UI, finalTransferSyntax);
     }
 
     // Use ByteArrayOutputStream as intermediate buffer to handle transfer syntax properly
-    // Create stream with Explicit VR for FMI, it will auto-switch to transferSyntax from FMI
     ByteArrayOutputStream buffer = new ByteArrayOutputStream();
     try (DicomOutputStream dos = new DicomOutputStream(buffer, UID.ExplicitVRLittleEndian)) {
       dos.writeDataset(fmi, dataset);
