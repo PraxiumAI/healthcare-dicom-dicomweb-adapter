@@ -42,6 +42,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
+import org.dcm4che3.data.UID;
 import org.dcm4che3.data.VR;
 import org.dcm4che3.imageio.codec.Transcoder;
 import org.dcm4che3.io.DicomInputStream;
@@ -291,8 +292,9 @@ public class CStoreService extends BasicCStoreSCP {
     }
 
     // Use ByteArrayOutputStream as intermediate buffer to handle transfer syntax properly
+    // Create stream with Explicit VR for FMI, it will auto-switch to transferSyntax from FMI
     ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-    try (DicomOutputStream dos = new DicomOutputStream(buffer, transferSyntax)) {
+    try (DicomOutputStream dos = new DicomOutputStream(buffer, UID.ExplicitVRLittleEndian)) {
       dos.writeDataset(fmi, dataset);
     }
 
