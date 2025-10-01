@@ -24,6 +24,7 @@ import com.google.cloud.healthcare.imaging.dicomadapter.cstore.multipledest.IMul
 import com.google.cloud.healthcare.imaging.dicomadapter.monitoring.Event;
 import com.google.cloud.healthcare.imaging.dicomadapter.monitoring.MonitoringService;
 import com.google.common.io.CountingInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -283,10 +284,20 @@ public class CStoreService extends BasicCStoreSCP {
       }
     }
 
-    // Write modified DICOM
-    try (DicomOutputStream dos = new DicomOutputStream(outputStream, transferSyntax)) {
+    // Write modified DICOM with proper transfer syntax handling
+    // Update FMI with the correct transfer syntax UID if needed
+    if (fmi != null) {
+      fmi.setString(Tag.TransferSyntaxUID, VR.UI, transferSyntax);
+    }
+
+    // Use ByteArrayOutputStream as intermediate buffer to handle transfer syntax properly
+    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+    try (DicomOutputStream dos = new DicomOutputStream(buffer, transferSyntax)) {
       dos.writeDataset(fmi, dataset);
     }
+
+    // Write buffered data to output
+    buffer.writeTo(outputStream);
   }
 
   private void processStream(Executor underlyingExecutor, InputStream inputStream,
