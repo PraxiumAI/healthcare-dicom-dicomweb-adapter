@@ -168,6 +168,16 @@ public class CStoreService extends BasicCStoreSCP {
       response.setInt(Tag.Status, VR.US, Status.Success);
       MonitoringService.addEvent(Event.CSTORE_BYTES, countingStream.getCount());
     } catch (DicomWebException e) {
+      // Handle duplicate instances as success (idempotent behavior)
+      if (isDuplicateInstance(e)) {
+        log.info("Instance already exists in DICOM store - treating as success: SOP Instance UID = {}",
+                 request.getString(Tag.AffectedSOPInstanceUID));
+        response.setInt(Tag.Status, VR.US, Status.Success);
+        MonitoringService.addEvent(Event.CSTORE_BYTES, countingStream.getCount());
+        return;
+      }
+
+      // For other DicomWeb errors, report and throw
       reportError(e, Event.CSTORE_ERROR);
       throw new DicomServiceException(e.getStatus(), e);
     } catch (DicomServiceException e) {
@@ -201,6 +211,29 @@ public class CStoreService extends BasicCStoreSCP {
     if (value == null || value.trim().length() == 0) {
       throw new DicomServiceException(Status.CannotUnderstand, "Mandatory tag empty: " + name);
     }
+  }
+
+  /**
+   * Checks if a DicomWebException indicates a duplicate instance error.
+   *
+   * @param e The DicomWebException to check
+   * @return true if the exception indicates the instance already exists
+   */
+  private boolean isDuplicateInstance(DicomWebException e) {
+    // Check for HTTP 409 Conflict status
+    if (e.getHttpStatus() != 409) {
+      return false;
+    }
+
+    // Check if error message indicates duplicate
+    String message = e.getMessage();
+    if (message == null) {
+      return false;
+    }
+
+    String lowerMessage = message.toLowerCase();
+    return lowerMessage.contains("already exists") ||
+           lowerMessage.contains("duplicate");
   }
 
   /**
