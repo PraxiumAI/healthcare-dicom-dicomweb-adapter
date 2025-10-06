@@ -173,7 +173,7 @@ public class CStoreService extends BasicCStoreSCP {
         log.info("Instance already exists in DICOM store - treating as success: SOP Instance UID = {}",
                  request.getString(Tag.AffectedSOPInstanceUID));
         response.setInt(Tag.Status, VR.US, Status.Success);
-        MonitoringService.addEvent(Event.CSTORE_BYTES, countingStream.getCount());
+        // Note: Cannot report byte count here as countingStream is out of scope
         return;
       }
 
