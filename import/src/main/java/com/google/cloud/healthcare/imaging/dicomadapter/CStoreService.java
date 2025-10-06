@@ -14,6 +14,7 @@
 
 package com.google.cloud.healthcare.imaging.dicomadapter;
 
+import com.google.api.client.http.HttpResponseException;
 import com.google.cloud.healthcare.IDicomWebClient.DicomWebException;
 import com.google.cloud.healthcare.deid.redactor.DicomRedactor;
 import com.google.cloud.healthcare.imaging.dicomadapter.cstore.DicomStreamUtil;
@@ -168,16 +169,24 @@ public class CStoreService extends BasicCStoreSCP {
       response.setInt(Tag.Status, VR.US, Status.Success);
       MonitoringService.addEvent(Event.CSTORE_BYTES, countingStream.getCount());
     } catch (DicomWebException e) {
-      // Handle duplicate instances as success (idempotent behavior)
+      // Handle duplicate instances - return error status but don't abort connection
       if (isDuplicateInstance(e)) {
-        log.info("Instance already exists in DICOM store - treating as success: SOP Instance UID = {}",
-                 request.getString(Tag.AffectedSOPInstanceUID));
-        response.setInt(Tag.Status, VR.US, Status.Success);
+        String sopInstanceUID = request.getString(Tag.AffectedSOPInstanceUID);
+        log.info("Duplicate instance detected - instance already exists in DICOM store. " +
+                 "Returning error status without aborting connection. SOP Instance UID = {}", sopInstanceUID);
+
+        // Return error status (0x0110 = 272) with descriptive ErrorComment
+        // By returning normally (not throwing DicomServiceException), we avoid A-ABORT
+        // This allows the client to see the error and description without connection termination
+        response.setInt(Tag.Status, VR.US, Status.ProcessingFailure);
+        response.setString(Tag.ErrorComment, VR.LO,
+            "Instance already exists (duplicate upload detected)");
+
         // Note: Cannot report byte count here as countingStream is out of scope
         return;
       }
 
-      // For other DicomWeb errors, report and throw
+      // For other DicomWeb errors (non-duplicate 409s, or other HTTP errors), report and throw
       reportError(e, Event.CSTORE_ERROR);
       throw new DicomServiceException(e.getStatus(), e);
     } catch (DicomServiceException e) {
@@ -225,15 +234,40 @@ public class CStoreService extends BasicCStoreSCP {
       return false;
     }
 
-    // Check if error message indicates duplicate
-    String message = e.getMessage();
-    if (message == null) {
-      return false;
+    // For Healthcare API STOW-RS, check if the underlying cause contains "already exists"
+    // The response XML includes: <DicomAttribute tag="00090097">already exists</DicomAttribute>
+    Throwable cause = e.getCause();
+    if (cause != null) {
+      // Check exception message (includes response body per HttpResponseException docs)
+      String causeMessage = cause.getMessage();
+      if (causeMessage != null && causeMessage.toLowerCase().contains("already exists")) {
+        return true;
+      }
+
+      // Also check via getContent() if it's an HttpResponseException
+      if (cause instanceof com.google.api.client.http.HttpResponseException) {
+        try {
+          String content = ((com.google.api.client.http.HttpResponseException) cause).getContent();
+          if (content != null && content.toLowerCase().contains("already exists")) {
+            return true;
+          }
+        } catch (Exception ignored) {
+          // If we can't get content, continue to other checks
+        }
+      }
     }
 
-    String lowerMessage = message.toLowerCase();
-    return lowerMessage.contains("already exists") ||
-           lowerMessage.contains("duplicate");
+    // Also check the main DicomWebException message (though it typically won't contain this)
+    String message = e.getMessage();
+    if (message != null && message.toLowerCase().contains("already exists")) {
+      return true;
+    }
+
+    // If we can't confirm it's a duplicate, treat as a different type of 409 conflict
+    // and let it propagate as an error
+    log.warn("Received HTTP 409 Conflict but cannot confirm it's a duplicate instance. " +
+             "Exception: {}, Cause: {}", e.getMessage(), cause != null ? cause.getMessage() : "null");
+    return false;
   }
 
   /**
