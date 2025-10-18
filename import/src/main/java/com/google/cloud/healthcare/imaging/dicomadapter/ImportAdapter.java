@@ -91,8 +91,14 @@ public class ImportAdapter {
         options.setDsn(flags.sentryDsn);
         options.setEnvironment("production");
         options.setTracesSampleRate(1.0);
+
+        // Add data like request headers and IP for users
+        options.setSendDefaultPii(true);
+
+        // Enable debug mode (useful for troubleshooting)
+        options.setDebug(flags.verbose);
       });
-      log.info("Sentry error monitoring initialized");
+      log.info("Sentry error monitoring initialized with debug={}", flags.verbose);
     }
 
     // Credentials, use the default service credentials.
