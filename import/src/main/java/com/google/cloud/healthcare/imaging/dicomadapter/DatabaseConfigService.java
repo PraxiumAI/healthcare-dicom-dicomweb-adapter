@@ -101,6 +101,18 @@ public class DatabaseConfigService {
   }
 
   /**
+   * Package-private constructor for testing with mocked DataSource.
+   * Allows unit tests to inject mock HikariDataSource without creating real database connections.
+   *
+   * @param dataSource Mocked HikariDataSource
+   * @param sentryEnabled Whether Sentry error reporting is enabled
+   */
+  DatabaseConfigService(HikariDataSource dataSource, boolean sentryEnabled) {
+    this.dataSource = dataSource;
+    this.sentryEnabled = sentryEnabled;
+  }
+
+  /**
    * Checks if a given calling AET and called AET pair is authorized.
    *
    * @param callingAET The calling Application Entity Title

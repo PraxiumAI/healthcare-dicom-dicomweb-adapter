@@ -44,6 +44,7 @@ import com.google.cloud.healthcare.util.TestUtils;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.sql.SQLException;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -755,6 +756,147 @@ public final class CStoreServiceTest {
       this.connectError = connectError;
       this.httpResponseCode = httpResponseCode;
     }
+  }
+
+  // Authorization tests with DatabaseConfigService
+
+  @Mock
+  DatabaseConfigService mockDatabaseConfigService;
+
+  @Test
+  public void testCStoreService_authorizedAet_success() throws Exception {
+    // Arrange
+    when(mockDatabaseConfigService.isAuthorized(anyString(), anyString())).thenReturn(true);
+
+    // Act & Assert
+    basicCStoreServiceTestWithAuth(
+        true, // authorized
+        false,
+        HttpStatusCodes.STATUS_CODE_OK,
+        Status.Success);
+
+    verify(mockDatabaseConfigService).isAuthorized(anyString(), anyString());
+  }
+
+  @Test
+  public void testCStoreService_unauthorizedAet_notAuthorized() throws Exception {
+    // Arrange
+    when(mockDatabaseConfigService.isAuthorized(anyString(), anyString())).thenReturn(false);
+
+    // Act & Assert
+    basicCStoreServiceTestWithAuth(
+        false, // unauthorized
+        false,
+        HttpStatusCodes.STATUS_CODE_OK,
+        Status.NotAuthorized);
+
+    verify(mockDatabaseConfigService).isAuthorized(anyString(), anyString());
+  }
+
+  @Test
+  public void testCStoreService_authorizationDatabaseError_processingFailure() throws Exception {
+    // Arrange
+    when(mockDatabaseConfigService.isAuthorized(anyString(), anyString()))
+        .thenThrow(new SQLException("Database connection timeout"));
+
+    // Act & Assert
+    basicCStoreServiceTestWithAuth(
+        true, // authorized (but will throw)
+        false,
+        HttpStatusCodes.STATUS_CODE_OK,
+        Status.ProcessingFailure);
+
+    verify(mockDatabaseConfigService).isAuthorized(anyString(), anyString());
+  }
+
+  @Test
+  public void testCStoreService_noDatabaseConfigService_success() throws Exception {
+    // When DatabaseConfigService is null, authorization should be skipped
+    basicCStoreServiceTestWithAuth(
+        true, // doesn't matter
+        false,
+        HttpStatusCodes.STATUS_CODE_OK,
+        Status.Success,
+        null); // null DatabaseConfigService
+
+    // Should not call isAuthorized when service is null
+    verify(mockDatabaseConfigService, never()).isAuthorized(anyString(), anyString());
+  }
+
+  private void basicCStoreServiceTestWithAuth(
+      boolean authorized,
+      boolean connectionError,
+      int httpStatus,
+      int expectedDimseStatus) throws Exception {
+    basicCStoreServiceTestWithAuth(
+        authorized,
+        connectionError,
+        httpStatus,
+        expectedDimseStatus,
+        mockDatabaseConfigService);
+  }
+
+  private void basicCStoreServiceTestWithAuth(
+      boolean authorized,
+      boolean connectionError,
+      int httpStatus,
+      int expectedDimseStatus,
+      DatabaseConfigService databaseConfigService) throws Exception {
+
+    DicomInputStream in = (DicomInputStream) TestUtils.streamDICOMStripHeaders(TestUtils.TEST_MR_FILE);
+    InputStreamDataWriter data = new InputStreamDataWriter(in);
+
+    // Create C-STORE DICOM server with DatabaseConfigService
+    int serverPort = createDicomServerWithAuth(databaseConfigService, connectionError, httpStatus);
+
+    // Associate with peer AE
+    Association association =
+        associate(serverHostname, serverPort, UID.MRImageStorage, in.getTransferSyntax());
+
+    // Send the DICOM file
+    DimseRSPAssert rspAssert = new DimseRSPAssert(association, expectedDimseStatus);
+    association.cstore(
+        UID.MRImageStorage,
+        SOP_INSTANCE_UID,
+        1,
+        data,
+        in.getTransferSyntax(),
+        rspAssert);
+    association.waitForOutstandingRSP();
+
+    // Close the association
+    association.release();
+    association.waitForSocketClose();
+
+    rspAssert.assertResult();
+  }
+
+  private int createDicomServerWithAuth(
+      DatabaseConfigService databaseConfigService,
+      boolean connectionError,
+      int httpStatus) throws Exception {
+
+    int serverPort = PortUtil.getFreePort();
+    DicomServiceRegistry serviceRegistry = new DicomServiceRegistry();
+    serviceRegistry.addDicomService(new BasicCEchoSCP());
+
+    IDestinationClientFactory destinationClientFactory = new SingleDestinationClientFactory(
+        ImmutableList.of(),
+        new MockStowClient(connectionError, httpStatus));
+
+    CStoreService cStoreService =
+        new CStoreService(
+            destinationClientFactory,
+            null,
+            null,
+            null,
+            Collections.emptyList(),
+            databaseConfigService); // Pass DatabaseConfigService
+
+    serviceRegistry.addDicomService(cStoreService);
+    Device serverDevice = DeviceUtil.createServerDevice(serverAET, serverPort, serviceRegistry);
+    serverDevice.bindConnections();
+    return serverPort;
   }
 
   // TODO(b/73252285): increase test coverage.
