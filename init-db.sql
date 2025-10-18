@@ -55,14 +55,13 @@ COMMENT ON COLUMN study_storage.study_uid IS 'DICOM StudyInstanceUID';
 COMMENT ON COLUMN study_storage.dicomweb_destination IS 'DICOMweb URL where study is stored';
 
 -- Create trigger to update updated_at timestamp
-CREATE
-OR REPLACE FUNCTION update_updated_at_column() RETURNS TRIGGER AS $ $ BEGIN NEW.updated_at = CURRENT_TIMESTAMP;
-
-RETURN NEW;
-
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
 END;
-
-$ $ language 'plpgsql';
+$$ LANGUAGE plpgsql;
 
 -- Apply trigger to all tables
 CREATE TRIGGER update_aet_authorization_updated_at BEFORE
@@ -96,31 +95,4 @@ UPDATE
 -- INSERT INTO aet_authorization (calling_aet, called_aet)
 -- VALUES ('MODALITY_01', 'PRAXIUM')
 -- ON CONFLICT (calling_aet) DO NOTHING;
--- Display summary
-DO $ $ BEGIN RAISE NOTICE '=====================================';
 
-RAISE NOTICE 'Database initialization complete!';
-
-RAISE NOTICE '=====================================';
-
-RAISE NOTICE 'Tables created:';
-
-RAISE NOTICE '  - aet_authorization';
-
-RAISE NOTICE '  - aet_storage';
-
-RAISE NOTICE '  - study_storage';
-
-RAISE NOTICE '';
-
-RAISE NOTICE 'Next steps:';
-
-RAISE NOTICE '  1. Review and update authorization rules';
-
-RAISE NOTICE '  2. Configure AET storage destinations';
-
-RAISE NOTICE '  3. Start DICOM adapter with --db_url flag';
-
-RAISE NOTICE '=====================================';
-
-END $ $;
