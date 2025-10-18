@@ -241,6 +241,28 @@ public class Flags {
       splitter = NoSplitter.class)
   List<String> addPrivateTags = new ArrayList<>();
 
+  @Parameter(
+      names = {"--db_url"},
+      description =
+          "PostgreSQL database JDBC URL (e.g., jdbc:postgresql://localhost:5432/dicom_adapter). "
+              + "If not specified, database features will be disabled.")
+  String dbUrl = "";
+
+  @Parameter(
+      names = {"--db_user"},
+      description = "PostgreSQL database user for authentication.")
+  String dbUser = "";
+
+  @Parameter(
+      names = {"--db_password"},
+      description = "PostgreSQL database password for authentication.")
+  String dbPassword = "";
+
+  @Parameter(
+      names = {"--sentry_dsn"},
+      description = "Sentry DSN for error reporting and monitoring.")
+  String sentryDsn = "";
+
   public Flags() {
   }
 }

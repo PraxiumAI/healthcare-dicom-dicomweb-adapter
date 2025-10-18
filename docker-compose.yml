@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database for adapter configuration
+  postgres:
+    image: postgres:15
+    container_name: dicom-postgres
+    environment:
+      POSTGRES_DB: dicom_adapter
+      POSTGRES_USER: dicom_user
+      POSTGRES_PASSWORD: secure_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dicom_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # DICOM Import Adapter
+  dicom-adapter:
+    image: dicom-import-adapter:latest
+    container_name: dicom-adapter
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4008:4008"
+    environment:
+      # Google Cloud credentials (mount service account key)
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-key.json
+    volumes:
+      # Mount GCP service account key (UPDATE THIS PATH)
+      - ./gcp-key.json:/secrets/gcp-key.json:ro
+    command:
+      - --dimse_aet=PRAXIUM
+      - --dimse_port=4008
+      - --dicomweb_address=https://healthcare.googleapis.com/v1/projects/YOUR_PROJECT/locations/us-central1/datasets/YOUR_DATASET/dicomStores/YOUR_STORE/dicomWeb
+      - --db_url=jdbc:postgresql://postgres:5432/dicom_adapter
+      - --db_user=dicom_user
+      - --db_password=secure_password
+      - --sentry_dsn=${SENTRY_DSN:-}
+      - --verbose
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "netstat -an | grep 4008 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Gradle build service for compiling Java code
+  gradle-compile:
+    image: gradle:8.5-jdk11
+    working_dir: /app
+    volumes:
+      - .:/app
+      - gradle-cache:/home/gradle/.gradle
+    command: gradle :import:compileJava --no-daemon
+    environment:
+      - GRADLE_OPTS=-Dorg.gradle.daemon=false
+
+  # Gradle service for building Docker image
+  gradle-docker-build:
+    image: gradle:8.5-jdk11
+    working_dir: /app
+    volumes:
+      - .:/app
+      - gradle-cache:/home/gradle/.gradle
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: gradle :import:dockerBuildImage --no-daemon -Pdocker_tag=dicom-import-adapter:latest
+    environment:
+      - GRADLE_OPTS=-Dorg.gradle.daemon=false
+
+volumes:
+  gradle-cache:
+  postgres-data:

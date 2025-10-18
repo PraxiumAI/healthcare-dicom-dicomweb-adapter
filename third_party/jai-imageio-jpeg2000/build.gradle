@@ -31,17 +31,17 @@ description = 'JPEG2000 support for Java Advanced Imaging Image I/O Tools API'
 sourceCompatibility = '1.6'
 
 task sourcesJar(type: Jar) {
-    classifier = 'sources'
+    archiveClassifier = 'sources'
     from(sourceSets.main.allJava)
 }
 
 task testsJar(type: Jar) {
-    classifier = 'tests'
+    archiveClassifier = 'tests'
     from(sourceSets.test.output)
 }
 
 task javadocJar(type: Jar) {
-    classifier = 'javadoc'
+    archiveClassifier = 'javadoc'
     from(javadoc.destinationDir)
 }
 

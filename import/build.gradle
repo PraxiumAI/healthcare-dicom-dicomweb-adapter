@@ -82,6 +82,15 @@ dependencies {
     implementation "com.google.cloud:google-cloud-storage"
     implementation 'com.google.cloud:google-cloud-nio'
 
+    // PostgreSQL JDBC driver for database integration
+    implementation 'org.postgresql:postgresql:42.7.1'
+
+    // HikariCP for database connection pooling
+    implementation 'com.zaxxer:HikariCP:5.1.0'
+
+    // Sentry SDK for error monitoring
+    implementation 'io.sentry:sentry:7.2.0'
+
     testImplementation "com.google.truth:truth:1.0"
     testImplementation "org.mockito:mockito-core:3.+"
     testImplementation "junit:junit:4.2"
@@ -140,6 +149,7 @@ task printVersion {
 }
 
 dockerSyncBuildContext.finalizedBy tasks.copySourceAndLicenseToDockerImage
+dockerBuildImage.dependsOn tasks.copySourceAndLicenseToDockerImage
 dockerCreateDockerfile {
     instruction 'ADD license /usr/share/oss-license'
     instruction 'ADD source /usr/share/oss-source'

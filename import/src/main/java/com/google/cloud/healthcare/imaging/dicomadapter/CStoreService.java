@@ -72,17 +72,20 @@ public class CStoreService extends BasicCStoreSCP {
   private final DicomRedactor redactor;
   private final String transcodeToSyntax;
   private final List<ImportAdapter.PrivateTagConfig> privateTagConfigs;
+  private final DatabaseConfigService databaseConfigService;
 
   CStoreService(IDestinationClientFactory destinationClientFactory,
                 DicomRedactor redactor,
                 String transcodeToSyntax,
                 IMultipleDestinationUploadService multipleSendService,
-                List<ImportAdapter.PrivateTagConfig> privateTagConfigs) {
+                List<ImportAdapter.PrivateTagConfig> privateTagConfigs,
+                DatabaseConfigService databaseConfigService) {
     this.destinationClientFactory = destinationClientFactory;
     this.redactor = redactor;
     this.transcodeToSyntax = transcodeToSyntax != null && transcodeToSyntax.length() > 0 ? transcodeToSyntax : null;
     this.multipleSendService = multipleSendService;
     this.privateTagConfigs = privateTagConfigs != null ? privateTagConfigs : new ArrayList<>();
+    this.databaseConfigService = databaseConfigService;
 
     if(this.transcodeToSyntax != null) {
       log.info("Transcoding to: " + transcodeToSyntax);
@@ -103,6 +106,26 @@ public class CStoreService extends BasicCStoreSCP {
       throws IOException {
     try {
       MonitoringService.addEvent(Event.CSTORE_REQUEST);
+
+      // Perform AET-based authorization check if database service is available
+      if (databaseConfigService != null) {
+        String callingAET = association.getAAssociateAC().getCallingAET();
+        String calledAET = association.getAAssociateAC().getCalledAET();
+
+        try {
+          boolean authorized = databaseConfigService.isAuthorized(callingAET, calledAET);
+          if (!authorized) {
+            log.warn("Authorization failed for calling_aet={}, called_aet={}", callingAET, calledAET);
+            throw new DicomServiceException(Status.NotAuthorized,
+                "Not authorized: calling_aet=" + callingAET + ", called_aet=" + calledAET);
+          }
+          log.debug("Authorization successful for calling_aet={}, called_aet={}", callingAET, calledAET);
+        } catch (java.sql.SQLException e) {
+          log.error("Database error during authorization check. Rejecting request.", e);
+          throw new DicomServiceException(Status.ProcessingFailure,
+              "Database unavailable during authorization");
+        }
+      }
 
       String sopClassUID = request.getString(Tag.AffectedSOPClassUID);
       String sopInstanceUID = request.getString(Tag.AffectedSOPInstanceUID);

@@ -156,7 +156,8 @@ public final class CStoreServiceTest {
             null,
             transcodeToSyntax,
             multipleDestinationSendService,
-            Collections.emptyList());
+            Collections.emptyList(),
+            null); // DatabaseConfigService null for unit tests
 
     serviceRegistry.addDicomService(cStoreService);
     Device serverDevice = DeviceUtil.createServerDevice(serverAET, serverPort, serviceRegistry);

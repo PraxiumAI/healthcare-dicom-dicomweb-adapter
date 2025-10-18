@@ -43,8 +43,10 @@ import com.google.cloud.healthcare.imaging.dicomadapter.cstore.multipledest.send
 import com.google.cloud.healthcare.imaging.dicomadapter.monitoring.Event;
 import com.google.cloud.healthcare.imaging.dicomadapter.monitoring.MonitoringService;
 import com.google.common.collect.ImmutableList;
+import io.sentry.Sentry;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -83,6 +85,16 @@ public class ImportAdapter {
     // Adjust logging.
     LogUtil.Log4jToStdout(flags.verbose ? "DEBUG" : "ERROR");
 
+    // Initialize Sentry if DSN is provided
+    if (!flags.sentryDsn.isEmpty()) {
+      Sentry.init(options -> {
+        options.setDsn(flags.sentryDsn);
+        options.setEnvironment("production");
+        options.setTracesSampleRate(1.0);
+      });
+      log.info("Sentry error monitoring initialized");
+    }
+
     // Credentials, use the default service credentials.
     GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
     if (!flags.oauthScopes.isEmpty()) {
@@ -91,6 +103,34 @@ public class ImportAdapter {
 
     HttpRequestFactory requestFactory =
         new NetHttpTransport().createRequestFactory(new HttpCredentialsAdapter(credentials));
+
+    // Initialize Database Configuration Service if database URL is provided
+    DatabaseConfigService databaseConfigService = null;
+    if (!flags.dbUrl.isEmpty()) {
+      if (flags.dbUser.isEmpty() || flags.dbPassword.isEmpty()) {
+        throw new IllegalArgumentException(
+            "Database credentials are incomplete. If --db_url is specified, both --db_user and "
+                + "--db_password must also be provided.");
+      }
+
+      try {
+        boolean sentryEnabled = !flags.sentryDsn.isEmpty();
+        databaseConfigService = new DatabaseConfigService(
+            flags.dbUrl,
+            flags.dbUser,
+            flags.dbPassword,
+            sentryEnabled);
+        log.info("DatabaseConfigService initialized successfully");
+      } catch (SQLException e) {
+        log.error("Failed to initialize database connection. Application cannot start.", e);
+        if (!flags.sentryDsn.isEmpty()) {
+          Sentry.captureException(e);
+        }
+        throw new RuntimeException("Failed to connect to database on startup", e);
+      }
+    } else {
+      log.info("Database configuration not provided. Running without database features.");
+    }
 
     // Initialize Monitoring
     if (!flags.monitoringProjectId.isEmpty()) {
@@ -128,14 +168,27 @@ public class ImportAdapter {
 
     BackupUploadService backupUploadService = configureBackupUploadService(flags, credentials);
 
-    IDestinationClientFactory destinationClientFactory = configureDestinationClientFactory(
-      defaultCstoreDicomWebClient, credentials, flags, backupUploadService != null);
+    IDestinationClientFactory destinationClientFactory;
+    if (databaseConfigService != null) {
+      // Use database-driven routing when database is configured
+      log.info("Using DatabaseDestinationClientFactory for dynamic routing");
+      destinationClientFactory = new com.google.cloud.healthcare.imaging.dicomadapter.cstore.destination.DatabaseDestinationClientFactory(
+          databaseConfigService,
+          defaultCstoreDicomWebClient,
+          credentials,
+          flags.useStowOverwrite);
+    } else {
+      // Use static configuration when database is not configured
+      destinationClientFactory = configureDestinationClientFactory(
+          defaultCstoreDicomWebClient, credentials, flags, backupUploadService != null);
+    }
 
     MultipleDestinationUploadService multipleDestinationSendService = configureMultipleDestinationUploadService(
         flags, cstoreSubAet, backupUploadService);
 
     CStoreService cStoreService =
-        new CStoreService(destinationClientFactory, redactor, flags.transcodeToSyntax, multipleDestinationSendService, privateTagConfigs);
+        new CStoreService(destinationClientFactory, redactor, flags.transcodeToSyntax,
+            multipleDestinationSendService, privateTagConfigs, databaseConfigService);
     serviceRegistry.addDicomService(cStoreService);
 
     // Handle C-FIND
