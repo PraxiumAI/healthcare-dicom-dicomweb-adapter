@@ -25,6 +25,8 @@ import com.google.cloud.healthcare.imaging.dicomadapter.cstore.multipledest.IMul
 import com.google.cloud.healthcare.imaging.dicomadapter.monitoring.Event;
 import com.google.cloud.healthcare.imaging.dicomadapter.monitoring.MonitoringService;
 import com.google.common.io.CountingInputStream;
+import io.sentry.Sentry;
+import io.sentry.SentryLevel;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -73,19 +75,22 @@ public class CStoreService extends BasicCStoreSCP {
   private final String transcodeToSyntax;
   private final List<ImportAdapter.PrivateTagConfig> privateTagConfigs;
   private final DatabaseConfigService databaseConfigService;
+  private final boolean sentryEnabled;
 
   CStoreService(IDestinationClientFactory destinationClientFactory,
                 DicomRedactor redactor,
                 String transcodeToSyntax,
                 IMultipleDestinationUploadService multipleSendService,
                 List<ImportAdapter.PrivateTagConfig> privateTagConfigs,
-                DatabaseConfigService databaseConfigService) {
+                DatabaseConfigService databaseConfigService,
+                boolean sentryEnabled) {
     this.destinationClientFactory = destinationClientFactory;
     this.redactor = redactor;
     this.transcodeToSyntax = transcodeToSyntax != null && transcodeToSyntax.length() > 0 ? transcodeToSyntax : null;
     this.multipleSendService = multipleSendService;
     this.privateTagConfigs = privateTagConfigs != null ? privateTagConfigs : new ArrayList<>();
     this.databaseConfigService = databaseConfigService;
+    this.sentryEnabled = sentryEnabled;
 
     if(this.transcodeToSyntax != null) {
       log.info("Transcoding to: " + transcodeToSyntax);
@@ -198,6 +203,12 @@ public class CStoreService extends BasicCStoreSCP {
         log.info("Duplicate instance detected - instance already exists in DICOM store. " +
                  "Returning error status without aborting connection. SOP Instance UID = {}", sopInstanceUID);
 
+        if (sentryEnabled) {
+          Sentry.captureMessage(
+              "Duplicate DICOM instance detected: " + sopInstanceUID,
+              SentryLevel.INFO);
+        }
+
         // Return error status (0x0110 = 272) with descriptive ErrorComment
         // By returning normally (not throwing DicomServiceException), we avoid A-ABORT
         // This allows the client to see the error and description without connection termination
@@ -237,6 +248,11 @@ public class CStoreService extends BasicCStoreSCP {
       MonitoringService.addEvent(event);
     }
     log.error("C-STORE request failed: ", e);
+
+    // Send error to Sentry if initialized
+    if (sentryEnabled) {
+      Sentry.captureException(e);
+    }
   }
 
   private void validateParam(String value, String name) throws DicomServiceException {

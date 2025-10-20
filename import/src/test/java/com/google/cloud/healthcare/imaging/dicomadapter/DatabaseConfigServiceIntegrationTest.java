@@ -48,8 +48,7 @@ public class DatabaseConfigServiceIntegrationTest {
         DB_URL,
         DB_USER,
         DB_PASSWORD,
-        false // Sentry disabled for tests
-    );
+        false); // Sentry disabled for tests
   }
 
   @After

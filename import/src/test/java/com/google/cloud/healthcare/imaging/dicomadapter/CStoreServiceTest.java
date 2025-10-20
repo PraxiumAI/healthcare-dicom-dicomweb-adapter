@@ -158,7 +158,8 @@ public final class CStoreServiceTest {
             transcodeToSyntax,
             multipleDestinationSendService,
             Collections.emptyList(),
-            null); // DatabaseConfigService null for unit tests
+            null, // DatabaseConfigService null for unit tests
+            false); // sentryEnabled
 
     serviceRegistry.addDicomService(cStoreService);
     Device serverDevice = DeviceUtil.createServerDevice(serverAET, serverPort, serviceRegistry);
@@ -732,12 +733,12 @@ public final class CStoreServiceTest {
     public Boolean getStowOverwrite() {
       return false;
     }
-  
+
     @Override
     public void delete(String path) throws DicomWebException {
       throw new UnsupportedOperationException();
     }
-  
+
     @Override
     public void delete(InputStream stream) throws DicomWebException {
       throw new UnsupportedOperationException();
@@ -891,7 +892,8 @@ public final class CStoreServiceTest {
             null,
             null,
             Collections.emptyList(),
-            databaseConfigService); // Pass DatabaseConfigService
+            databaseConfigService, // Pass DatabaseConfigService
+            false); // sentryEnabled
 
     serviceRegistry.addDicomService(cStoreService);
     Device serverDevice = DeviceUtil.createServerDevice(serverAET, serverPort, serviceRegistry);

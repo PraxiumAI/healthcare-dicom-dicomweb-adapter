@@ -277,15 +277,4 @@ public class DatabaseConfigServiceTest {
     DatabaseConfigService service = new DatabaseConfigService(mockDataSource, false);
     return service;
   }
-
-  // Additional constructor for DatabaseConfigService to support mocking
-  // This would need to be added to DatabaseConfigService.java:
-  /**
-   * Package-private constructor for testing with mocked DataSource.
-   *
-   * DatabaseConfigService(HikariDataSource dataSource, boolean sentryEnabled) {
-   *   this.dataSource = dataSource;
-   *   this.sentryEnabled = sentryEnabled;
-   * }
-   */
 }

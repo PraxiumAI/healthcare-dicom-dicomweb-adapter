@@ -76,6 +76,7 @@ public class ImportAdapter {
     jCommander.parse(args);
 
     String dicomwebAddress = DicomWebValidation.validatePath(flags.dicomwebAddress, DicomWebValidation.DICOMWEB_ROOT_VALIDATION);
+    final boolean sentryEnabled = !flags.sentryDsn.isEmpty();
 
     if(flags.help){
       jCommander.usage();
@@ -86,7 +87,7 @@ public class ImportAdapter {
     LogUtil.Log4jToStdout(flags.verbose ? "DEBUG" : "ERROR");
 
     // Initialize Sentry if DSN is provided
-    if (!flags.sentryDsn.isEmpty()) {
+    if (sentryEnabled) {
       Sentry.init(options -> {
         options.setDsn(flags.sentryDsn);
         options.setEnvironment("production");
@@ -99,6 +100,19 @@ public class ImportAdapter {
         options.setDebug(flags.verbose);
       });
       log.info("Sentry error monitoring initialized with debug={}", flags.verbose);
+
+      // Set global uncaught exception handler to capture all unhandled exceptions
+      Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+        log.error("Uncaught exception in thread {}", thread.getName(), throwable);
+        Sentry.captureException(throwable);
+        // Give Sentry time to send the event before the thread dies
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      });
+      log.info("Sentry global exception handler registered");
     }
 
     // Credentials, use the default service credentials.
@@ -120,7 +134,6 @@ public class ImportAdapter {
       }
 
       try {
-        boolean sentryEnabled = !flags.sentryDsn.isEmpty();
         databaseConfigService = new DatabaseConfigService(
             flags.dbUrl,
             flags.dbUser,
@@ -129,7 +142,7 @@ public class ImportAdapter {
         log.info("DatabaseConfigService initialized successfully");
       } catch (SQLException e) {
         log.error("Failed to initialize database connection. Application cannot start.", e);
-        if (!flags.sentryDsn.isEmpty()) {
+        if (sentryEnabled) {
           Sentry.captureException(e);
         }
         throw new RuntimeException("Failed to connect to database on startup", e);
@@ -195,7 +208,7 @@ public class ImportAdapter {
 
     CStoreService cStoreService =
         new CStoreService(destinationClientFactory, redactor, flags.transcodeToSyntax,
-            multipleDestinationSendService, privateTagConfigs, databaseConfigService);
+            multipleDestinationSendService, privateTagConfigs, databaseConfigService, sentryEnabled);
     serviceRegistry.addDicomService(cStoreService);
 
     // Handle C-FIND
