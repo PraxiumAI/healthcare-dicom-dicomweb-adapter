@@ -14,9 +14,14 @@
 
 package com.google.cloud.healthcare.imaging.dicomadapter.cstore.destination;
 
+import com.google.api.client.http.HttpRequestFactory;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.auth.http.HttpCredentialsAdapter;
 import com.google.auth.oauth2.GoogleCredentials;
+import com.google.cloud.healthcare.DicomWebClient;
 import com.google.cloud.healthcare.DicomWebClientJetty;
 import com.google.cloud.healthcare.IDicomWebClient;
+import com.google.cloud.healthcare.StringUtil;
 import com.google.cloud.healthcare.imaging.dicomadapter.DatabaseConfigService;
 import java.sql.SQLException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,6 +46,7 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
   private final IDicomWebClient defaultDicomWebClient;
   private final GoogleCredentials credentials;
   private final boolean useStowOverwrite;
+  private final boolean useHttp2ForStow;
 
   // Cache of DicomWebClient instances by destination URL to avoid recreating clients
   private final ConcurrentHashMap<String, IDicomWebClient> clientCache = new ConcurrentHashMap<>();
@@ -52,16 +58,19 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
    * @param defaultDicomWebClient Default client to use when no database routing applies
    * @param credentials Google credentials for creating new DicomWebClient instances
    * @param useStowOverwrite Whether to use STOW-RS overwrite mode
+   * @param useHttp2ForStow Whether to use HTTP/2 for STOW-RS requests
    */
   public DatabaseDestinationClientFactory(
       DatabaseConfigService databaseConfigService,
       IDicomWebClient defaultDicomWebClient,
       GoogleCredentials credentials,
-      boolean useStowOverwrite) {
+      boolean useStowOverwrite,
+      boolean useHttp2ForStow) {
     this.databaseConfigService = databaseConfigService;
     this.defaultDicomWebClient = defaultDicomWebClient;
     this.credentials = credentials;
     this.useStowOverwrite = useStowOverwrite;
+    this.useHttp2ForStow = useHttp2ForStow;
   }
 
   @Override
@@ -142,10 +151,27 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
    */
   private IDicomWebClient getOrCreateClient(String destinationUrl) {
     return clientCache.computeIfAbsent(destinationUrl, url -> {
-      log.info("Creating new DicomWebClient for destination: {}", url);
-      // Ensure URL ends with /studies for STOW-RS
-      String stowUrl = url.endsWith("/studies") ? url : url + "/studies";
-      return new DicomWebClientJetty(credentials, stowUrl, useStowOverwrite);
+      log.info("Creating new DicomWebClient (HTTP/2={}) for destination: {}", useHttp2ForStow, url);
+
+      if (useHttp2ForStow) {
+        // HTTP/2 client (DicomWebClientJetty)
+        String stowUrl = url.endsWith("/studies") ? url : url + "/studies";
+        return new DicomWebClientJetty(credentials, stowUrl, useStowOverwrite);
+      } else {
+        // HTTP/1.1 client (DicomWebClient)
+        HttpRequestFactory requestFactory =
+            new NetHttpTransport().createRequestFactory(new HttpCredentialsAdapter(credentials));
+
+        // Extract base address and path
+        String baseAddress = url;
+        String path = "studies";
+        if (url.endsWith("/studies")) {
+          int lastSlash = url.lastIndexOf("/studies");
+          baseAddress = url.substring(0, lastSlash);
+        }
+
+        return new DicomWebClient(requestFactory, baseAddress, path, useStowOverwrite);
+      }
     });
   }
 }

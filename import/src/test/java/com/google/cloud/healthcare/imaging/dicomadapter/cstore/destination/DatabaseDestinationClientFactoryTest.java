@@ -64,7 +64,8 @@ public class DatabaseDestinationClientFactoryTest {
         mockDatabaseService,
         mockDefaultClient,
         mockCredentials,
-        false // useStowOverwrite
+        false, // useStowOverwrite
+        false  // useHttp2ForStow (use HTTP/1.1 to avoid idle timeout issues)
     );
   }
 

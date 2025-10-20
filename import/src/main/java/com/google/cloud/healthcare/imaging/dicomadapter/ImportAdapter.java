@@ -177,12 +177,13 @@ public class ImportAdapter {
     IDestinationClientFactory destinationClientFactory;
     if (databaseConfigService != null) {
       // Use database-driven routing when database is configured
-      log.info("Using DatabaseDestinationClientFactory for dynamic routing");
+      log.info("Using DatabaseDestinationClientFactory for dynamic routing (HTTP/2={})", flags.useHttp2ForStow);
       destinationClientFactory = new com.google.cloud.healthcare.imaging.dicomadapter.cstore.destination.DatabaseDestinationClientFactory(
           databaseConfigService,
           defaultCstoreDicomWebClient,
           credentials,
-          flags.useStowOverwrite);
+          flags.useStowOverwrite,
+          flags.useHttp2ForStow);
     } else {
       // Use static configuration when database is not configured
       destinationClientFactory = configureDestinationClientFactory(
