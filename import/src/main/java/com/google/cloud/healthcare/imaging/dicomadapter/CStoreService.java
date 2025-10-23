@@ -197,11 +197,11 @@ public class CStoreService extends BasicCStoreSCP {
       response.setInt(Tag.Status, VR.US, Status.Success);
       MonitoringService.addEvent(Event.CSTORE_BYTES, countingStream.getCount());
     } catch (DicomWebException e) {
-      // Handle duplicate instances - return error status but don't abort connection
+      // Handle duplicate instances - log and set ErrorComment but return success to avoid failures in batch uploads
       if (isDuplicateInstance(e)) {
         String sopInstanceUID = request.getString(Tag.AffectedSOPInstanceUID);
         log.info("Duplicate instance detected - instance already exists in DICOM store. " +
-                 "Returning error status without aborting connection. SOP Instance UID = {}", sopInstanceUID);
+                 "Returning success with ErrorComment. SOP Instance UID = {}", sopInstanceUID);
 
         if (sentryEnabled) {
           Sentry.captureMessage(
@@ -209,10 +209,9 @@ public class CStoreService extends BasicCStoreSCP {
               SentryLevel.INFO);
         }
 
-        // Return error status (0x0110 = 272) with descriptive ErrorComment
-        // By returning normally (not throwing DicomServiceException), we avoid A-ABORT
-        // This allows the client to see the error and description without connection termination
-        response.setInt(Tag.Status, VR.US, Status.ProcessingFailure);
+        // Return success (0x0000) with descriptive ErrorComment
+        // By returning normally (not throwing DicomServiceException), we avoid A-ABORT and keep batch uploads going
+        response.setInt(Tag.Status, VR.US, Status.Success);
         response.setString(Tag.ErrorComment, VR.LO,
             "Instance already exists (duplicate upload detected)");
 
