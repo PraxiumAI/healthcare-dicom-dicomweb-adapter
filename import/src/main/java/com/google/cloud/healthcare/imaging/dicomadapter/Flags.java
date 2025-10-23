@@ -49,9 +49,45 @@ public class Flags {
 
   @Parameter(
       names = {"--dimse_port"},
-      description = "Port the server is listening to for incoming DIMSE requests."
+      description = "Port the server is listening to for incoming plain (unencrypted) DIMSE requests."
   )
   Integer dimsePort = 0;
+
+  @Parameter(
+      names = {"--dimse_tls_port"},
+      description = "Port the server is listening to for incoming DIMSE-TLS requests. If not specified, TLS is disabled."
+  )
+  Integer dimseTlsPort = 0;
+
+  @Parameter(
+      names = {"--tls_keystore"},
+      description = "Path to the server's keystore file (e.g., PKCS12 format) for TLS."
+  )
+  String tlsKeystore = "";
+
+  @Parameter(
+      names = {"--tls_keystore_pass"},
+      description = "Password for the TLS keystore and the key within it."
+  )
+  String tlsKeystorePass = "";
+
+  @Parameter(
+      names = {"--tls_truststore"},
+      description = "(Optional) Path to the truststore file for TLS client authentication (mTLS)."
+  )
+  String tlsTruststore = "";
+
+  @Parameter(
+      names = {"--tls_truststore_pass"},
+      description = "(Optional) Password for the TLS truststore."
+  )
+  String tlsTruststorePass = "";
+
+  @Parameter(
+      names = {"--tls_need_client_auth"},
+      description = "Whether to require client authentication (mutual TLS). Defaults to false."
+  )
+  boolean tlsNeedClientAuth = false;
 
   @Deprecated
   @Parameter(

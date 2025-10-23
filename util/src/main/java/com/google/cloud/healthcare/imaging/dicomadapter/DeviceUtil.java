@@ -20,12 +20,15 @@ import org.dcm4che3.net.Connection;
 import org.dcm4che3.net.Device;
 import org.dcm4che3.net.TransferCapability;
 import org.dcm4che3.net.service.DicomServiceRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Static utilities for creating {@link Device} used in dcm4che library.
  */
 public class DeviceUtil {
 
+  private static final Logger log = LoggerFactory.getLogger(DeviceUtil.class);
   private static final String ALL_ALLOWED_SOP_CLASSES = "*";
   private static final String ALL_ALLOWED_TRANSFER_SYNTAXES = "*";
   private DeviceUtil() {
@@ -68,6 +71,92 @@ public class DeviceUtil {
     device.addApplicationEntity(applicationEntity);
 
     // Add the DICOM request handlers to the device.
+    device.setDimseRQHandler(serviceRegistry);
+    device.setScheduledExecutor(Executors.newSingleThreadScheduledExecutor());
+    device.setExecutor(Executors.newCachedThreadPool());
+    return device;
+  }
+
+  /**
+   * Creates a DICOM server with support for both plain and TLS connections.
+   * Supports dual-port listening for backward compatibility with legacy devices.
+   *
+   * @param applicationEntityName The AET name
+   * @param dicomPort Port for plain (unencrypted) connections, 0 or null to disable
+   * @param dicomTlsPort Port for TLS connections, 0 or null to disable
+   * @param serviceRegistry DICOM service handlers
+   * @param tlsKeystore Path to keystore file (required if TLS port is enabled)
+   * @param tlsKeystorePass Keystore password (required if TLS port is enabled)
+   * @param tlsTruststore Path to truststore for mTLS (optional)
+   * @param tlsTruststorePass Truststore password (optional)
+   * @param tlsNeedClientAuth Whether to require client certificates (mTLS)
+   * @return Configured Device instance
+   */
+  public static Device createServerDevice(
+      String applicationEntityName,
+      Integer dicomPort,
+      Integer dicomTlsPort,
+      DicomServiceRegistry serviceRegistry,
+      String tlsKeystore,
+      String tlsKeystorePass,
+      String tlsTruststore,
+      String tlsTruststorePass,
+      boolean tlsNeedClientAuth) {
+
+    Device device = new Device("dicom-to-dicomweb-adapter-server");
+    ApplicationEntity applicationEntity = new ApplicationEntity(applicationEntityName);
+    applicationEntity.setAssociationAcceptor(true);
+    device.addApplicationEntity(applicationEntity);
+
+    // 1. Configure plain (unencrypted) connection if port is specified
+    if (dicomPort != null && dicomPort > 0) {
+      Connection plainConnection = new Connection("plain", null, dicomPort);
+      log.info("DIMSE service listening on plain port {}", dicomPort);
+      device.addConnection(plainConnection);
+      applicationEntity.addConnection(plainConnection);
+    }
+
+    // 2. Configure TLS connection if port and keystore are specified
+    if (dicomTlsPort != null && dicomTlsPort > 0 && tlsKeystore != null && !tlsKeystore.isEmpty()) {
+      Connection tlsConnection = new Connection("tls", null, dicomTlsPort);
+      log.info("DIMSE service listening on TLS port {}", dicomTlsPort);
+
+      try {
+        // TLS settings are configured on the Device
+        // Set keystore URL (path to the keystore file)
+        device.setKeyStoreURL(tlsKeystore);
+        device.setKeyStoreType("PKCS12");
+        device.setKeyStorePin(tlsKeystorePass);
+        device.setKeyStoreKeyPin(tlsKeystorePass); // Same password for key
+
+        // Set truststore if provided (for mTLS)
+        if (tlsTruststore != null && !tlsTruststore.isEmpty()) {
+          device.setTrustStoreURL(tlsTruststore);
+          device.setTrustStoreType("PKCS12");
+          device.setTrustStorePin(tlsTruststorePass);
+        }
+
+        // Enable TLS on this specific connection
+        tlsConnection.setTlsProtocols("TLSv1.2");
+        tlsConnection.setTlsNeedClientAuth(tlsNeedClientAuth);
+
+        device.addConnection(tlsConnection);
+        applicationEntity.addConnection(tlsConnection);
+      } catch (Exception e) {
+        // Throw a runtime exception to halt startup if TLS config is invalid.
+        throw new RuntimeException("Failed to configure TLS on port " + dicomTlsPort, e);
+      }
+    }
+
+    // Define what this AET can accept (all SOP classes and transfer syntaxes)
+    TransferCapability transferCapability =
+        new TransferCapability(
+            null /* commonName */,
+            ALL_ALLOWED_SOP_CLASSES,
+            TransferCapability.Role.SCP,
+            ALL_ALLOWED_TRANSFER_SYNTAXES);
+    applicationEntity.addTransferCapability(transferCapability);
+
     device.setDimseRQHandler(serviceRegistry);
     device.setScheduledExecutor(Executors.newSingleThreadScheduledExecutor());
     device.setExecutor(Executors.newCachedThreadPool());

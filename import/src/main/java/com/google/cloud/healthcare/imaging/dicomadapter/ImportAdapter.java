@@ -227,7 +227,16 @@ public class ImportAdapter {
     serviceRegistry.addDicomService(new StorageCommitmentService(dicomWebClient, aetDict));
 
     // Start DICOM server
-    Device device = DeviceUtil.createServerDevice(flags.dimseAET, flags.dimsePort, serviceRegistry);
+    Device device = DeviceUtil.createServerDevice(
+        flags.dimseAET,
+        flags.dimsePort,
+        flags.dimseTlsPort,
+        serviceRegistry,
+        flags.tlsKeystore,
+        flags.tlsKeystorePass,
+        flags.tlsTruststore,
+        flags.tlsTruststorePass,
+        flags.tlsNeedClientAuth);
     device.bindConnections();
   }
 

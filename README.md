@@ -8,6 +8,8 @@ Table of Contents
 
    * [DICOM Adapter](#dicom-adapter)
       * [Import Adapter](#import-adapter)
+         * [Database-Driven Authorization and Routing](#database-driven-authorization-and-routing)
+         * [TLS Support](#tls-support)
       * [Export Adapter](#export-adapter)
       * [Stackdriver Monitoring](#stackdriver-monitoring)
       * [DICOM Redactor](#dicom-redactor)
@@ -74,6 +76,136 @@ kubectl create configmap aet-dictionary --from-file=AETs.json
 The AET dictionary JSON can also be specified directly via the "--aet_dictionary_inline" parameter.
 
 For the list of command line flags, see [here](import/src/main/java/com/google/cloud/healthcare/imaging/dicomadapter/Flags.java)
+
+### Database-Driven Authorization and Routing
+
+The Import Adapter supports PostgreSQL-based dynamic AET authorization and study routing. This allows runtime configuration changes without service restart.
+
+#### Features
+
+- **AET Authorization**: Control which calling AETs can connect using PostgreSQL table
+- **Dynamic Routing**: Route studies to different DICOM stores based on StudyUID or source AET
+- **Three-tier routing**:
+  1. Study-level: Route specific StudyInstanceUIDs to designated stores
+  2. AET-level: Route all studies from specific AETs to designated stores
+  3. Default fallback: Use configured default DICOMweb address
+
+#### Database Schema
+
+```sql
+-- AET Authorization
+CREATE TABLE aet_authorization (
+    calling_aet VARCHAR(16) PRIMARY KEY,
+    called_aet VARCHAR(16) NOT NULL
+);
+
+-- AET-based routing
+CREATE TABLE aet_storage (
+    aet VARCHAR(16) PRIMARY KEY,
+    dicomweb_destination VARCHAR(255) NOT NULL
+);
+
+-- Study-based routing (auto-populated)
+CREATE TABLE study_storage (
+    study_uid VARCHAR(64) PRIMARY KEY,
+    dicomweb_destination VARCHAR(255) NOT NULL
+);
+```
+
+#### Configuration
+
+Use the following flags to enable database features:
+
+```bash
+--db_url=jdbc:postgresql://localhost:5432/dicom_adapter
+--db_user=dicom_user
+--db_password=secure_password
+```
+
+#### Example Usage
+
+```bash
+# Add authorized AET
+INSERT INTO aet_authorization (calling_aet, called_aet)
+VALUES ('HOSPITAL_A', 'MY_ADAPTER_AET');
+
+# Route all studies from HOSPITAL_A to specific store
+INSERT INTO aet_storage (aet, dicomweb_destination)
+VALUES ('HOSPITAL_A', 'https://healthcare.googleapis.com/v1/projects/proj/locations/us/datasets/ds1/dicomStores/store1/dicomWeb');
+
+# Route specific study to different store
+INSERT INTO study_storage (study_uid, dicomweb_destination)
+VALUES ('1.2.840.113619.2.55.3.12345', 'https://healthcare.googleapis.com/v1/projects/proj/locations/us/datasets/ds2/dicomStores/store2/dicomWeb');
+```
+
+**Note**: Changes to authorization and routing tables take effect immediately without adapter restart.
+
+### TLS Support
+
+The Import Adapter can listen for DIMSE connections over both plain TCP and TLS simultaneously on different ports. This enables secure communication with modern devices while maintaining compatibility with legacy systems.
+
+#### Configuration Flags
+
+| Flag | Description | Required |
+|------|-------------|----------|
+| `--dimse_port` | Port for unencrypted DIMSE connections | No |
+| `--dimse_tls_port` | Port for TLS-encrypted DIMSE connections | Yes (for TLS) |
+| `--tls_keystore` | Path to server's keystore file (PKCS12 format) | Yes (for TLS) |
+| `--tls_keystore_pass` | Password for the keystore | Yes (for TLS) |
+| `--tls_truststore` | Path to truststore for client certificate validation (mTLS) | No |
+| `--tls_truststore_pass` | Password for the truststore | No |
+| `--tls_need_client_auth` | Require client certificates (mutual TLS) | No |
+
+#### Example: Running with TLS
+
+```bash
+# Generate or obtain a PKCS12 keystore
+keytool -genkeypair \
+  -alias dicom-adapter \
+  -keyalg RSA \
+  -keysize 2048 \
+  -storetype PKCS12 \
+  -keystore server.p12 \
+  -validity 365
+
+# Run adapter with both plain and TLS ports
+java -jar import-adapter.jar \
+  --dimse_aet=MY_AET \
+  --dimse_port=11112 \
+  --dimse_tls_port=11113 \
+  --tls_keystore=/path/to/server.p12 \
+  --tls_keystore_pass=your_password \
+  --dicomweb_address=https://healthcare.googleapis.com/v1/...
+```
+
+#### Docker Example with TLS
+
+```bash
+docker run -d \
+  -p 11112:11112 \
+  -p 11113:11113 \
+  -v /path/to/certs:/etc/tls:ro \
+  gcr.io/cloud-healthcare-containers/healthcare-api-dicom-dicomweb-adapter-import \
+  --dimse_aet=MY_AET \
+  --dimse_port=11112 \
+  --dimse_tls_port=11113 \
+  --tls_keystore=/etc/tls/server.p12 \
+  --tls_keystore_pass=your_password \
+  --dicomweb_address=https://healthcare.googleapis.com/v1/...
+```
+
+#### Security Best Practices
+
+- Use certificates from a trusted Certificate Authority (CA) in production
+- Store keystore passwords in environment variables or secrets management systems
+- Mount certificate files as read-only volumes (`:ro`)
+- Enable mutual TLS (`--tls_need_client_auth=true`) for enhanced security
+- Regularly rotate TLS certificates before expiration
+- Use TLS 1.2 or higher (automatically enforced)
+
+#### Client Configuration
+
+Clients connecting to the TLS port must trust the server's certificate. For self-signed certificates (testing only), configure the client's truststore to include the server certificate.
 
 ## Export Adapter
 
