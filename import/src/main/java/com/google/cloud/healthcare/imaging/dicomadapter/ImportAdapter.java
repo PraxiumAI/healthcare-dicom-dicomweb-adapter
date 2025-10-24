@@ -377,7 +377,7 @@ public class ImportAdapter {
   }
 
   private static final Set<String> SUPPORTED_VARIABLES = new HashSet<>(
-      Arrays.asList("CALLING_AET", "CALLED_AET", "TIMESTAMP"));
+      Arrays.asList("CALLING_AET", "CALLED_AET", "TIMESTAMP", "DEVICE_ID"));
 
   private static final Pattern TAG_PATTERN = Pattern.compile(
       "\\(([0-9A-Fa-f]{4}),([0-9A-Fa-f]{4})\\):([A-Z]{2}):(.*)");

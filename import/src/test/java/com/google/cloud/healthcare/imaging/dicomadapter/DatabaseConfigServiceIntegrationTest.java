@@ -20,6 +20,8 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
+import org.dcm4che3.net.Status;
+import org.dcm4che3.net.service.DicomServiceException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -64,21 +66,28 @@ public class DatabaseConfigServiceIntegrationTest {
   }
 
   @Test
-  public void testIsAuthorized_AuthorizedPair_ReturnsTrue() throws SQLException {
-    boolean authorized = databaseConfigService.isAuthorized("TEST_HOSPITAL_A", "TEST_PRAXIUM");
-    assertTrue("TEST_HOSPITAL_A should be authorized for TEST_PRAXIUM", authorized);
+  public void testGetAuthorization_AuthorizedPair_ReturnsUuid() throws org.dcm4che3.net.service.DicomServiceException {
+    assertNotNull(databaseConfigService.getAuthorization("TEST_HOSPITAL_A", "TEST_PRAXIUM"));
   }
 
   @Test
-  public void testIsAuthorized_UnauthorizedPair_ReturnsFalse() throws SQLException {
-    boolean authorized = databaseConfigService.isAuthorized("UNKNOWN_AET", "TEST_PRAXIUM");
-    assertFalse("UNKNOWN_AET should not be authorized", authorized);
+  public void testGetAuthorization_UnauthorizedPair_ThrowsNotAuthorized() {
+    try {
+      databaseConfigService.getAuthorization("UNKNOWN_AET", "TEST_PRAXIUM");
+      fail("Should throw NotAuthorized");
+    } catch (DicomServiceException e) {
+      assertEquals(Status.NotAuthorized, e.getStatus());
+    }
   }
 
   @Test
-  public void testIsAuthorized_WrongCalledAET_ReturnsFalse() throws SQLException {
-    boolean authorized = databaseConfigService.isAuthorized("UNAUTHORIZED_AET", "TEST_PRAXIUM");
-    assertFalse("UNAUTHORIZED_AET with wrong called_aet should not be authorized", authorized);
+  public void testGetAuthorization_WrongCalledAET_ThrowsNotAuthorized() {
+    try {
+      databaseConfigService.getAuthorization("UNAUTHORIZED_AET", "TEST_PRAXIUM");
+      fail("Should throw NotAuthorized");
+    } catch (DicomServiceException e) {
+      assertEquals(Status.NotAuthorized, e.getStatus());
+    }
   }
 
   @Test
@@ -192,11 +201,11 @@ public class DatabaseConfigServiceIntegrationTest {
   }
 
   @Test
-  public void testMultipleConnections_WithinPoolLimit_Succeeds() throws SQLException {
+  public void testMultipleConnections_WithinPoolLimit_Succeeds() throws org.dcm4che3.net.service.DicomServiceException {
     // Test that connection pool can handle multiple operations
     for (int i = 0; i < 5; i++) {
-      boolean authorized = databaseConfigService.isAuthorized("TEST_HOSPITAL_A", "TEST_PRAXIUM");
-      assertTrue("Authorization should succeed on iteration " + i, authorized);
+      assertNotNull("Authorization should succeed on iteration " + i,
+          databaseConfigService.getAuthorization("TEST_HOSPITAL_A", "TEST_PRAXIUM"));
     }
   }
 
@@ -206,7 +215,7 @@ public class DatabaseConfigServiceIntegrationTest {
   private void cleanupTestStudy(String studyUID) {
     try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
          Statement stmt = conn.createStatement()) {
-      stmt.executeUpdate("DELETE FROM study_storage WHERE study_uid = '" + studyUID + "'");
+      stmt.executeUpdate("DELETE FROM dicom_study_destination WHERE study_uid = '" + studyUID + "'");
     } catch (SQLException e) {
       System.err.println("Warning: Failed to cleanup test study " + studyUID + ": " + e.getMessage());
     }
@@ -220,14 +229,14 @@ public class DatabaseConfigServiceIntegrationTest {
     try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD);
          Statement stmt = conn.createStatement()) {
 
-      // Check aet_authorization table exists
-      stmt.executeQuery("SELECT 1 FROM aet_authorization LIMIT 1");
+      // Check dicom_device table exists (contains authorization records)
+      stmt.executeQuery("SELECT 1 FROM dicom_device LIMIT 1");
 
-      // Check aet_storage table exists
-      stmt.executeQuery("SELECT 1 FROM aet_storage LIMIT 1");
+      // Check dicom_device_destination table exists
+      stmt.executeQuery("SELECT 1 FROM dicom_device_destination LIMIT 1");
 
-      // Check study_storage table exists
-      stmt.executeQuery("SELECT 1 FROM study_storage LIMIT 1");
+      // Check dicom_study_destination table exists
+      stmt.executeQuery("SELECT 1 FROM dicom_study_destination LIMIT 1");
     }
   }
 
@@ -235,9 +244,9 @@ public class DatabaseConfigServiceIntegrationTest {
    * Test authorization with multiple AETs
    */
   @Test
-  public void testIsAuthorized_MultipleAETs_AllWork() throws SQLException {
-    assertTrue(databaseConfigService.isAuthorized("TEST_HOSPITAL_A", "TEST_PRAXIUM"));
-    assertTrue(databaseConfigService.isAuthorized("TEST_HOSPITAL_B", "TEST_PRAXIUM"));
-    assertTrue(databaseConfigService.isAuthorized("TEST_MODALITY_01", "TEST_PRAXIUM"));
+  public void testIsAuthorized_MultipleAETs_AllWork() throws SQLException, org.dcm4che3.net.service.DicomServiceException {
+    assertNotNull(databaseConfigService.getAuthorization("TEST_HOSPITAL_A", "TEST_PRAXIUM"));
+    assertNotNull(databaseConfigService.getAuthorization("TEST_HOSPITAL_B", "TEST_PRAXIUM"));
+    assertNotNull(databaseConfigService.getAuthorization("TEST_MODALITY_01", "TEST_PRAXIUM"));
   }
 }

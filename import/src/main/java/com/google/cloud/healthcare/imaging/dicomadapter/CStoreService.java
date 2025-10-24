@@ -37,6 +37,7 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
@@ -117,19 +118,9 @@ public class CStoreService extends BasicCStoreSCP {
         String callingAET = association.getAAssociateAC().getCallingAET();
         String calledAET = association.getAAssociateAC().getCalledAET();
 
-        try {
-          boolean authorized = databaseConfigService.isAuthorized(callingAET, calledAET);
-          if (!authorized) {
-            log.warn("Authorization failed for calling_aet={}, called_aet={}", callingAET, calledAET);
-            throw new DicomServiceException(Status.NotAuthorized,
-                "Not authorized: calling_aet=" + callingAET + ", called_aet=" + calledAET);
-          }
-          log.debug("Authorization successful for calling_aet={}, called_aet={}", callingAET, calledAET);
-        } catch (java.sql.SQLException e) {
-          log.error("Database error during authorization check. Rejecting request.", e);
-          throw new DicomServiceException(Status.ProcessingFailure,
-              "Database unavailable during authorization");
-        }
+        // Will throw DicomServiceException on unauthorized or DB error
+        UUID deviceId = databaseConfigService.getAuthorization(callingAET, calledAET);
+        association.setProperty("DEVICE_ID", deviceId.toString());
       }
 
       String sopClassUID = request.getString(Tag.AffectedSOPClassUID);
@@ -347,6 +338,9 @@ public class CStoreService extends BasicCStoreSCP {
         return association.getAAssociateAC().getCallingAET();
       case "CALLED_AET":
         return association.getAAssociateAC().getCalledAET();
+      case "DEVICE_ID":
+        Object deviceId = association.getProperty("DEVICE_ID");
+        return deviceId != null ? deviceId.toString() : "";
       case "TIMESTAMP":
         return new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
       default:

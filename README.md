@@ -3,35 +3,35 @@
 The DICOM adapter is a set of components that translate between traditional DICOM DIMSE protocols (e.g., C-STORE) and the RESTful DICOMweb protocols (e.g., STOW-RS). There are
 two components, namely import and export adapter.
 
-Table of Contents
-=================
+# Table of Contents
 
-   * [DICOM Adapter](#dicom-adapter)
-      * [Import Adapter](#import-adapter)
-         * [Database-Driven Authorization and Routing](#database-driven-authorization-and-routing)
-         * [TLS Support](#tls-support)
-      * [Export Adapter](#export-adapter)
-      * [Stackdriver Monitoring](#stackdriver-monitoring)
-      * [DICOM Redactor](#dicom-redactor)
-      * [Private Tags](#private-tags)
-      * [Deployment using Kubernetes](#deployment-using-kubernetes)
-         * [Requirements](#requirements)
-         * [Deploying Docker Images to GKE](#deploying-docker-images-to-gke)
-      * [Local Deployment](#local-deployment)
-      * [Deployment using Data Protection Toolkit](#deployment-using-data-protection-toolkit)
-      * [Building from source](#building-from-source)
-         * [Building and publishing Docker Images](#building-and-publishing-docker-images)
-      * [Wiki](#wiki)
-      * [Troubleshooting](#troubleshooting)
+-   [DICOM Adapter](#dicom-adapter)
+    -   [Import Adapter](#import-adapter)
+        -   [Database-Driven Authorization and Routing](#database-driven-authorization-and-routing)
+        -   [TLS Support](#tls-support)
+    -   [Export Adapter](#export-adapter)
+    -   [Stackdriver Monitoring](#stackdriver-monitoring)
+    -   [DICOM Redactor](#dicom-redactor)
+    -   [Private Tags](#private-tags)
+    -   [Deployment using Kubernetes](#deployment-using-kubernetes)
+        -   [Requirements](#requirements)
+        -   [Deploying Docker Images to GKE](#deploying-docker-images-to-gke)
+    -   [Local Deployment](#local-deployment)
+    -   [Deployment using Data Protection Toolkit](#deployment-using-data-protection-toolkit)
+    -   [Building from source](#building-from-source)
+        -   [Building and publishing Docker Images](#building-and-publishing-docker-images)
+    -   [Wiki](#wiki)
+    -   [Troubleshooting](#troubleshooting)
 
 ## Import Adapter
 
 The Import Adapter converts incoming DIMSE requests to corresponding DICOMWeb requests and passes the converted results back to the DIMSE client. The following requests are supported:
-- C-STORE to STOW-RS
-- C-FIND to QIDO-RS
-- C-MOVE uses QIDO-RS to determine which instances to transfer, then for each instance executes a
-WADO-RS request to fetch the instance and a C-STORE request to transfer it to the C-MOVE destination
-- Storage commitment service to QIDO-RS
+
+-   C-STORE to STOW-RS
+-   C-FIND to QIDO-RS
+-   C-MOVE uses QIDO-RS to determine which instances to transfer, then for each instance executes a
+    WADO-RS request to fetch the instance and a C-STORE request to transfer it to the C-MOVE destination
+-   Storage commitment service to QIDO-RS
 
 Note that any C-FIND query on the ModalitiesInStudy tag will result in 1 QIDO-RS query per modality.
 
@@ -41,16 +41,18 @@ specifying the "ENV_AETS_JSON" environment variable.
 
 The following configuration needs to be added to the dicom-adapter.yaml file to use CMOVE.
 Please see the [Deployment using Kubernetes](#deployment-using-kubernetes) section for more information.
+
 ```yaml
 env:
-- name: ENV_AETS_JSON
-  valueFrom:
-    configMapKeyRef:
-      name: aet-dictionary
-      key: AETs.json
+    - name: ENV_AETS_JSON
+      valueFrom:
+          configMapKeyRef:
+              name: aet-dictionary
+              key: AETs.json
 ```
 
 Here is an example JSON dictionary:
+
 ```shell
 [
 	{
@@ -83,34 +85,16 @@ The Import Adapter supports PostgreSQL-based dynamic AET authorization and study
 
 #### Features
 
-- **AET Authorization**: Control which calling AETs can connect using PostgreSQL table
-- **Dynamic Routing**: Route studies to different DICOM stores based on StudyUID or source AET
-- **Three-tier routing**:
-  1. Study-level: Route specific StudyInstanceUIDs to designated stores
-  2. AET-level: Route all studies from specific AETs to designated stores
-  3. Default fallback: Use configured default DICOMweb address
+-   **AET Authorization**: Control which calling AETs can connect using PostgreSQL table
+-   **Dynamic Routing**: Route studies to different DICOM stores based on StudyUID or source AET
+-   **Three-tier routing**:
+    1. Study-level: Route specific StudyInstanceUIDs to designated stores
+    2. AET-level: Route all studies from specific AETs to designated stores
+    3. Default fallback: Use configured default DICOMweb address
 
 #### Database Schema
 
-```sql
--- AET Authorization
-CREATE TABLE aet_authorization (
-    calling_aet VARCHAR(16) PRIMARY KEY,
-    called_aet VARCHAR(16) NOT NULL
-);
-
--- AET-based routing
-CREATE TABLE aet_storage (
-    aet VARCHAR(16) PRIMARY KEY,
-    dicomweb_destination VARCHAR(255) NOT NULL
-);
-
--- Study-based routing (auto-populated)
-CREATE TABLE study_storage (
-    study_uid VARCHAR(64) PRIMARY KEY,
-    dicomweb_destination VARCHAR(255) NOT NULL
-);
-```
+See [init-db.sql](init-db.sql) for the database schema.
 
 #### Configuration
 
@@ -126,16 +110,19 @@ Use the following flags to enable database features:
 
 ```bash
 # Add authorized AET
-INSERT INTO aet_authorization (calling_aet, called_aet)
+INSERT INTO dicom_device (calling_aet, called_aet)
 VALUES ('HOSPITAL_A', 'MY_ADAPTER_AET');
 
+INSERT INTO dicom_destination (dicomweb_destination)
+VALUES ('https://healthcare.googleapis.com/v1/projects/proj/locations/us/datasets/ds1/dicomStores/store1/dicomWeb');
+
 # Route all studies from HOSPITAL_A to specific store
-INSERT INTO aet_storage (aet, dicomweb_destination)
-VALUES ('HOSPITAL_A', 'https://healthcare.googleapis.com/v1/projects/proj/locations/us/datasets/ds1/dicomStores/store1/dicomWeb');
+INSERT INTO dicom_device_destination (device_id, dicomweb_destination_id)
+VALUES ('HOSPITAL_A', '123e4567-e89b-12d3-a456-426614174000'); -- destination id
 
 # Route specific study to different store
-INSERT INTO study_storage (study_uid, dicomweb_destination)
-VALUES ('1.2.840.113619.2.55.3.12345', 'https://healthcare.googleapis.com/v1/projects/proj/locations/us/datasets/ds2/dicomStores/store2/dicomWeb');
+INSERT INTO dicom_study_destination (study_uid, dicomweb_destination_id)
+VALUES ('1.2.840.113619.2.55.3.12345', '123e4567-e89b-12d3-a456-426614174000'); -- destination id
 ```
 
 **Note**: Changes to authorization and routing tables take effect immediately without adapter restart.
@@ -146,15 +133,15 @@ The Import Adapter can listen for DIMSE connections over both plain TCP and TLS 
 
 #### Configuration Flags
 
-| Flag | Description | Required |
-|------|-------------|----------|
-| `--dimse_port` | Port for unencrypted DIMSE connections | No |
-| `--dimse_tls_port` | Port for TLS-encrypted DIMSE connections | Yes (for TLS) |
-| `--tls_keystore` | Path to server's keystore file (PKCS12 format) | Yes (for TLS) |
-| `--tls_keystore_pass` | Password for the keystore | Yes (for TLS) |
-| `--tls_truststore` | Path to truststore for client certificate validation (mTLS) | No |
-| `--tls_truststore_pass` | Password for the truststore | No |
-| `--tls_need_client_auth` | Require client certificates (mutual TLS) | No |
+| Flag                     | Description                                                 | Required      |
+| ------------------------ | ----------------------------------------------------------- | ------------- |
+| `--dimse_port`           | Port for unencrypted DIMSE connections                      | No            |
+| `--dimse_tls_port`       | Port for TLS-encrypted DIMSE connections                    | Yes (for TLS) |
+| `--tls_keystore`         | Path to server's keystore file (PKCS12 format)              | Yes (for TLS) |
+| `--tls_keystore_pass`    | Password for the keystore                                   | Yes (for TLS) |
+| `--tls_truststore`       | Path to truststore for client certificate validation (mTLS) | No            |
+| `--tls_truststore_pass`  | Password for the truststore                                 | No            |
+| `--tls_need_client_auth` | Require client certificates (mutual TLS)                    | No            |
 
 #### Example: Running with TLS
 
@@ -196,12 +183,12 @@ docker run -d \
 
 #### Security Best Practices
 
-- Use certificates from a trusted Certificate Authority (CA) in production
-- Store keystore passwords in environment variables or secrets management systems
-- Mount certificate files as read-only volumes (`:ro`)
-- Enable mutual TLS (`--tls_need_client_auth=true`) for enhanced security
-- Regularly rotate TLS certificates before expiration
-- Use TLS 1.2 or higher (automatically enforced)
+-   Use certificates from a trusted Certificate Authority (CA) in production
+-   Store keystore passwords in environment variables or secrets management systems
+-   Mount certificate files as read-only volumes (`:ro`)
+-   Enable mutual TLS (`--tls_need_client_auth=true`) for enhanced security
+-   Regularly rotate TLS certificates before expiration
+-   Use TLS 1.2 or higher (automatically enforced)
 
 #### Client Configuration
 
@@ -230,6 +217,7 @@ The monitored resource is configured as k8s_container, with values set from a co
 The following configuration needs to be added to the dicom-adapter.yaml file to configure the
 stackdriver monitoring resource. Please see the [Deployment using Kubernetes](#deployment-using-kubernetes) section
 for more information.
+
 ```yaml
 env:
 - name: ENV_POD_NAME
@@ -248,15 +236,17 @@ env:
 
 The Import Adapter can be configured to use the [DICOM Redactor Library](https://github.com/GoogleCloudPlatform/healthcare-deid/tree/master/offline_tools/redactor) to redact sensitive data contained in DICOM tags during a C-STORE upload.
 The user can configure which tags to redact/remove in one of 3 ways:
-- redact_keep_list - a list of DICOM tags to keep untouched. Other tags are removed.
-- redact_remove_list - a list of DICOM tags to remove. Other tags are kept untouched.
-- redact_filter_profile - a predefined profile that will keep and remove particular tags.
+
+-   redact_keep_list - a list of DICOM tags to keep untouched. Other tags are removed.
+-   redact_remove_list - a list of DICOM tags to remove. Other tags are kept untouched.
+-   redact_filter_profile - a predefined profile that will keep and remove particular tags.
 
 If enabled via one of the above options, the redactor also always regenerates the following UIDs:
-- StudyInstanceUID
-- SeriesInstanceUID
-- SOPInstanceUID
-- MediaStorageSOPInstanceUID
+
+-   StudyInstanceUID
+-   SeriesInstanceUID
+-   SOPInstanceUID
+-   MediaStorageSOPInstanceUID
 
 ## Private Tags
 
@@ -272,22 +262,22 @@ Use the `--add_private_tag` flag (can be specified multiple times):
 
 ### Format
 
-- **`(gggg,eeee)`** - DICOM tag in hexadecimal notation (group must be odd for private tags)
-- **`VR`** - Value Representation (e.g., `SH`, `LO`, `DT`)
-- **`value`** - Literal string or variable placeholder
+-   **`(gggg,eeee)`** - DICOM tag in hexadecimal notation (group must be odd for private tags)
+-   **`VR`** - Value Representation (e.g., `SH`, `LO`, `DT`)
+-   **`value`** - Literal string or variable placeholder
 
 ### Supported Variables
 
-- **`{CALLING_AET}`** - AE Title of the DICOM sender
-- **`{CALLED_AET}`** - AE Title of this adapter
-- **`{TIMESTAMP}`** - Current date/time in DICOM DT format (yyyyMMddHHmmss)
+-   **`{CALLING_AET}`** - AE Title of the DICOM sender
+-   **`{CALLED_AET}`** - AE Title of this adapter
+-   **`{TIMESTAMP}`** - Current date/time in DICOM DT format (yyyyMMddHHmmss)
 
 ### DICOM Standard Requirements
 
 According to the DICOM standard, private tags require a **Private Creator element**:
 
-- **Private Creator**: `(gggg,00PP)` with VR=LO containing your organization name
-- **Private Data**: `(gggg,PPEE)` where PP matches the Private Creator element number
+-   **Private Creator**: `(gggg,00PP)` with VR=LO containing your organization name
+-   **Private Data**: `(gggg,PPEE)` where PP matches the Private Creator element number
 
 **Important**: You must manually register the Private Creator tag before using private data elements. The adapter does not create Private Creator elements automatically.
 
@@ -304,19 +294,21 @@ java -jar import-adapter.jar \
 ```
 
 This configuration will add three tags to every uploaded DICOM instance:
-- **`(0777,0010)`** = `"PRAXIUM"` (Private Creator)
-- **`(0777,1000)`** = sender's AE Title (e.g., `"MY_PACS"`)
-- **`(0777,1001)`** = upload timestamp (e.g., `"20250930143022"`)
+
+-   **`(0777,0010)`** = `"PRAXIUM"` (Private Creator)
+-   **`(0777,1000)`** = sender's AE Title (e.g., `"MY_PACS"`)
+-   **`(0777,1001)`** = upload timestamp (e.g., `"20250930143022"`)
 
 ### Validation
 
-- Tag format and VR are validated at adapter startup
-- Unknown variables will cause startup failure with a clear error message
-- Invalid tags during C-STORE will return `ProcessingFailure` status to the sender
+-   Tag format and VR are validated at adapter startup
+-   Unknown variables will cause startup failure with a clear error message
+-   Invalid tags during C-STORE will return `ProcessingFailure` status to the sender
 
 ### Processing Order
 
 Private tags are added **after** DICOM Redaction (if configured) but **before** transcoding. This ensures:
+
 1. Redacted tags are not included in private tag values
 2. Private tags are preserved during transfer syntax conversion
 3. All processing errors are reported back to the sender
@@ -325,13 +317,13 @@ Private tags are added **after** DICOM Redaction (if configured) but **before** 
 
 The adapters can be deployed to Google Cloud Platform using [GKE] (https://cloud.google.com/kubernetes-engine/). We have published prebuilt Docker images for the both adapters to [Google Container Registry](https://cloud.google.com/container-registry/).
 
-- Import Adapter: `gcr.io/cloud-healthcare-containers/healthcare-api-dicom-dicomweb-adapter-import`
-- Export Adapter: `gcr.io/cloud-healthcare-containers/healthcare-api-dicom-dicomweb-adapter-export`
+-   Import Adapter: `gcr.io/cloud-healthcare-containers/healthcare-api-dicom-dicomweb-adapter-import`
+-   Export Adapter: `gcr.io/cloud-healthcare-containers/healthcare-api-dicom-dicomweb-adapter-export`
 
 ### Requirements
 
-- A [Google Cloud project](https://cloud.google.com).
-- Installed [gcloud](https://cloud.google.com/sdk/gcloud/) and [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/) command line tools.
+-   A [Google Cloud project](https://cloud.google.com).
+-   Installed [gcloud](https://cloud.google.com/sdk/gcloud/) and [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/) command line tools.
 
 ### Deploying Docker Images to GKE
 
@@ -346,25 +338,25 @@ the flags for your use case.
 apiVersion: extensions/v1beta1
 kind: Deployment
 metadata:
-  name: dicom-adapter
+    name: dicom-adapter
 spec:
-  replicas: 1
-  template:
-    metadata:
-      labels:
-        app: dicom-adapter
-    spec:
-      containers:
-        - name: dicom-import-adapter
-          image: gcr.io/cloud-healthcare-containers/healthcare-api-dicom-dicomweb-adapter-import:0.2.29
-          ports:
-            - containerPort: 2575
-              protocol: TCP
-              name: "port"
-          args:
-            - "--dimse_aet=IMPORTADAPTER"
-            - "--dimse_port=2575"
-            - "--dicomweb_address=https://healthcare.googleapis.com/v1/projects/myproject/locations/us-central1/datasets/mydataset/dicomStores/mydicomstore/dicomWeb"
+    replicas: 1
+    template:
+        metadata:
+            labels:
+                app: dicom-adapter
+        spec:
+            containers:
+                - name: dicom-import-adapter
+                  image: gcr.io/cloud-healthcare-containers/healthcare-api-dicom-dicomweb-adapter-import:0.2.29
+                  ports:
+                      - containerPort: 2575
+                        protocol: TCP
+                        name: "port"
+                  args:
+                      - "--dimse_aet=IMPORTADAPTER"
+                      - "--dimse_port=2575"
+                      - "--dicomweb_address=https://healthcare.googleapis.com/v1/projects/myproject/locations/us-central1/datasets/mydataset/dicomStores/mydicomstore/dicomWeb"
 ```
 
 **The yaml configuration has changed slightly from version 0.1 to 0.2. Please see the [upgrade guide](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/wiki/DICOM-Adapter-Upgrade-Guide#to-version-020) for instructions on how to upgrade your configuration.**
@@ -376,16 +368,16 @@ If needed, to additionally include an Export Adapter, you can add the to the
 containers in `dicom_adapter.yaml`. Modify the flags for your use case.
 
 ```yaml
-        - name: dicom-export-adapter
-          image: gcr.io/cloud-healthcare-containers/healthcare-api-dicom-dicomweb-adapter-export:0.2.29
-          args:
-            - "--peer_dimse_aet=PEERAET"
-            - "--peer_dimse_ip=localhost"
-            - "--peer_dimse_port=104"
-            - "--project_id=myproject"
-            - "--subscription_id=mysub"
-            - "--dicomweb_addr=https://healthcare.googleapis.com/v1"
-            - "--oauth_scopes=https://www.googleapis.com/auth/pubsub"
+- name: dicom-export-adapter
+  image: gcr.io/cloud-healthcare-containers/healthcare-api-dicom-dicomweb-adapter-export:0.2.29
+  args:
+      - "--peer_dimse_aet=PEERAET"
+      - "--peer_dimse_ip=localhost"
+      - "--peer_dimse_port=104"
+      - "--project_id=myproject"
+      - "--subscription_id=mysub"
+      - "--dicomweb_addr=https://healthcare.googleapis.com/v1"
+      - "--oauth_scopes=https://www.googleapis.com/auth/pubsub"
 ```
 
 The peer_dicomweb_addr and peer_dicomweb_stow_path parameters have been deprecated, please use the peer_dicomweb_address parameter instead.
@@ -405,21 +397,21 @@ balancer. Create a `dicom_adapter_load_balancer.yaml`, and add the following:
 apiVersion: v1
 kind: Service
 metadata:
-  name: dicom-adapter-load-balancer
-  # The "Internal" annotation will result in an load balancer that can only
-  # be accessed from within the VPC the Kubernetes cluster is in.
-  # You can remove this annotation to get an externally accessible load balancer.
-  annotations:
-    cloud.google.com/load-balancer-type: "Internal"
+    name: dicom-adapter-load-balancer
+    # The "Internal" annotation will result in an load balancer that can only
+    # be accessed from within the VPC the Kubernetes cluster is in.
+    # You can remove this annotation to get an externally accessible load balancer.
+    annotations:
+        cloud.google.com/load-balancer-type: "Internal"
 spec:
-  ports:
-  - port: 2575
-    targetPort: 2575
-    protocol: TCP
-    name: port
-  selector:
-    app: dicom-adapter
-  type: LoadBalancer
+    ports:
+        - port: 2575
+          targetPort: 2575
+          protocol: TCP
+          name: port
+    selector:
+        app: dicom-adapter
+    type: LoadBalancer
 ```
 
 To deploy the load balancer, execute the following:
@@ -433,6 +425,7 @@ The status and IP address of load balancer can be seen by executing:
 ```shell
 kubectl get service dicom-adapter-load-balancer
 ```
+
 ## Local Deployment
 
 Instructions on how to run the Import Adapter Docker image locally are available on the [wiki](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/wiki/Running-Docker-image-locally).
@@ -484,9 +477,10 @@ docker push ${TAG}
 
 For addition documentation please see the [Wiki](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/wiki).
 The wiki includes information on advanced features such as:
-* [C-Store Retries and File Backup](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/wiki/C-STORE-Backup-and-Retries)
-* [Routing to Multiple DICOM Stores](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/wiki/Routing-to-multiple-DICOM-stores)
-* [C-Store In-Transit Transcoding](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/wiki/In-transit-transcoding)
+
+-   [C-Store Retries and File Backup](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/wiki/C-STORE-Backup-and-Retries)
+-   [Routing to Multiple DICOM Stores](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/wiki/Routing-to-multiple-DICOM-stores)
+-   [C-Store In-Transit Transcoding](https://github.com/GoogleCloudPlatform/healthcare-dicom-dicomweb-adapter/wiki/In-transit-transcoding)
 
 ## Troubleshooting
 

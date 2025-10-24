@@ -23,6 +23,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.UUID;
+import org.dcm4che3.net.Status;
+import org.dcm4che3.net.service.DicomServiceException;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mock;
@@ -58,39 +61,42 @@ public class DatabaseConfigServiceTest {
   }
 
   @Test
-  public void testIsAuthorized_AuthorizedPair_ReturnsTrue() throws SQLException {
+  public void testGetAuthorization_AuthorizedPair_ReturnsUuid() throws SQLException, DicomServiceException {
     // Arrange
     when(mockResultSet.next()).thenReturn(true); // Authorization exists
+    when(mockResultSet.getString("id")).thenReturn(UUID.randomUUID().toString());
 
     service = createServiceWithMockedDataSource();
 
     // Act
-    boolean result = service.isAuthorized("HOSPITAL_A", "PRAXIUM");
+    UUID result = service.getAuthorization("HOSPITAL_A", "PRAXIUM");
 
     // Assert
-    assertTrue("Should return true for authorized AET pair", result);
+    assertNotNull("Should return UUID for authorized AET pair", result);
     verify(mockStatement).setString(1, "HOSPITAL_A");
     verify(mockStatement).setString(2, "PRAXIUM");
   }
 
   @Test
-  public void testIsAuthorized_UnauthorizedPair_ReturnsFalse() throws SQLException {
+  public void testGetAuthorization_UnauthorizedPair_ThrowsNotAuthorized() throws SQLException {
     // Arrange
     when(mockResultSet.next()).thenReturn(false); // No authorization
 
     service = createServiceWithMockedDataSource();
 
-    // Act
-    boolean result = service.isAuthorized("UNKNOWN_AET", "PRAXIUM");
-
-    // Assert
-    assertFalse("Should return false for unauthorized AET pair", result);
+    // Act & Assert
+    try {
+      service.getAuthorization("UNKNOWN_AET", "PRAXIUM");
+      fail("Should throw DicomServiceException on unauthorized");
+    } catch (DicomServiceException e) {
+      assertEquals(Status.NotAuthorized, e.getStatus());
+    }
     verify(mockStatement).setString(1, "UNKNOWN_AET");
     verify(mockStatement).setString(2, "PRAXIUM");
   }
 
   @Test
-  public void testIsAuthorized_DatabaseError_ThrowsSQLException() throws SQLException {
+  public void testGetAuthorization_DatabaseError_ThrowsDicomServiceException() throws SQLException {
     // Arrange
     when(mockStatement.executeQuery()).thenThrow(new SQLException("Connection timeout"));
 
@@ -98,10 +104,10 @@ public class DatabaseConfigServiceTest {
 
     // Act & Assert
     try {
-      service.isAuthorized("HOSPITAL_A", "PRAXIUM");
-      fail("Should throw SQLException on database error");
-    } catch (SQLException e) {
-      assertEquals("Connection timeout", e.getMessage());
+      service.getAuthorization("HOSPITAL_A", "PRAXIUM");
+      fail("Should throw DicomServiceException on database error");
+    } catch (DicomServiceException e) {
+      assertEquals(Status.ProcessingFailure, e.getStatus());
     }
   }
 

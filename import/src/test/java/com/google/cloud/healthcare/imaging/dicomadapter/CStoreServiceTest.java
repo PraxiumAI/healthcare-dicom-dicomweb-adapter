@@ -46,6 +46,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.sql.SQLException;
 import java.util.Collections;
+import java.util.UUID;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
@@ -767,7 +768,8 @@ public final class CStoreServiceTest {
   @Test
   public void testCStoreService_authorizedAet_success() throws Exception {
     // Arrange
-    when(mockDatabaseConfigService.isAuthorized(anyString(), anyString())).thenReturn(true);
+    when(mockDatabaseConfigService.getAuthorization(anyString(), anyString()))
+        .thenReturn(UUID.randomUUID());
 
     // Act & Assert
     basicCStoreServiceTestWithAuth(
@@ -776,13 +778,15 @@ public final class CStoreServiceTest {
         HttpStatusCodes.STATUS_CODE_OK,
         Status.Success);
 
-    verify(mockDatabaseConfigService).isAuthorized(anyString(), anyString());
+    verify(mockDatabaseConfigService).getAuthorization(anyString(), anyString());
   }
 
   @Test
   public void testCStoreService_unauthorizedAet_notAuthorized() throws Exception {
     // Arrange
-    when(mockDatabaseConfigService.isAuthorized(anyString(), anyString())).thenReturn(false);
+    when(mockDatabaseConfigService.getAuthorization(anyString(), anyString()))
+        .thenThrow(new org.dcm4che3.net.service.DicomServiceException(
+            org.dcm4che3.net.Status.NotAuthorized));
 
     // Act & Assert
     basicCStoreServiceTestWithAuth(
@@ -791,14 +795,15 @@ public final class CStoreServiceTest {
         HttpStatusCodes.STATUS_CODE_OK,
         Status.NotAuthorized);
 
-    verify(mockDatabaseConfigService).isAuthorized(anyString(), anyString());
+    verify(mockDatabaseConfigService).getAuthorization(anyString(), anyString());
   }
 
   @Test
   public void testCStoreService_authorizationDatabaseError_processingFailure() throws Exception {
     // Arrange
-    when(mockDatabaseConfigService.isAuthorized(anyString(), anyString()))
-        .thenThrow(new SQLException("Database connection timeout"));
+    when(mockDatabaseConfigService.getAuthorization(anyString(), anyString()))
+        .thenThrow(new org.dcm4che3.net.service.DicomServiceException(
+            org.dcm4che3.net.Status.ProcessingFailure));
 
     // Act & Assert
     basicCStoreServiceTestWithAuth(
@@ -807,7 +812,7 @@ public final class CStoreServiceTest {
         HttpStatusCodes.STATUS_CODE_OK,
         Status.ProcessingFailure);
 
-    verify(mockDatabaseConfigService).isAuthorized(anyString(), anyString());
+    verify(mockDatabaseConfigService).getAuthorization(anyString(), anyString());
   }
 
   @Test
@@ -820,8 +825,8 @@ public final class CStoreServiceTest {
         Status.Success,
         null); // null DatabaseConfigService
 
-    // Should not call isAuthorized when service is null
-    verify(mockDatabaseConfigService, never()).isAuthorized(anyString(), anyString());
+    // Should not call getAuthorization when service is null
+    verify(mockDatabaseConfigService, never()).getAuthorization(anyString(), anyString());
   }
 
   private void basicCStoreServiceTestWithAuth(

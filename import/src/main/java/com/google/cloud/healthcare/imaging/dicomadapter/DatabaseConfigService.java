@@ -21,6 +21,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.UUID;
+import org.dcm4che3.net.Status;
+import org.dcm4che3.net.service.DicomServiceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,18 +40,24 @@ public class DatabaseConfigService {
 
   // SQL queries
   private static final String SQL_CHECK_AUTHORIZATION =
-      "SELECT 1 FROM aet_authorization WHERE calling_aet = ? AND called_aet = ? LIMIT 1";
+      "SELECT id FROM dicom_device WHERE calling_aet = ? AND called_aet = ? LIMIT 1";
 
   private static final String SQL_GET_STORAGE_FOR_STUDY =
-      "SELECT dicomweb_destination FROM study_storage WHERE study_uid = ? LIMIT 1";
+      "SELECT dest.dicomweb_destination FROM dicom_study_destination sd "
+          + "JOIN dicom_destination dest ON sd.dicomweb_destination = dest.id "
+          + "WHERE sd.study_uid = ? LIMIT 1";
 
   private static final String SQL_GET_STORAGE_FOR_AET =
-      "SELECT dicomweb_destination FROM aet_storage WHERE aet = ? LIMIT 1";
+      "SELECT dest.dicomweb_destination FROM dicom_device_destination dd "
+          + "JOIN dicom_device dev ON dd.device_id = dev.id "
+          + "JOIN dicom_destination dest ON dd.dicomweb_destination = dest.id "
+          + "WHERE dev.calling_aet = ? LIMIT 1";
 
   private static final String SQL_MAP_STUDY_TO_STORAGE =
-      "INSERT INTO study_storage (study_uid, dicomweb_destination) "
-          + "VALUES (?, ?) "
-          + "ON CONFLICT (study_uid) DO UPDATE SET dicomweb_destination = EXCLUDED.dicomweb_destination";
+      "INSERT INTO dicom_study_destination (study_uid, dicomweb_destination) "
+          + "SELECT ?, id FROM dicom_destination WHERE dicomweb_destination = ? "
+          + "ON CONFLICT (study_uid) DO UPDATE "
+          + "SET dicomweb_destination = (SELECT id FROM dicom_destination WHERE dicomweb_destination = EXCLUDED.dicomweb_destination)";
 
   /**
    * Creates a new DatabaseConfigService with the specified configuration.
@@ -113,14 +122,14 @@ public class DatabaseConfigService {
   }
 
   /**
-   * Checks if a given calling AET and called AET pair is authorized.
+   * Returns the authorized device UUID for a given calling AET and called AET pair.
    *
    * @param callingAET The calling Application Entity Title
    * @param calledAET The called Application Entity Title
-   * @return true if the pair is authorized, false otherwise
-   * @throws SQLException if database query fails
+   * @return UUID of the authorized device
+   * @throws DicomServiceException if unauthorized or on database error
    */
-  public boolean isAuthorized(String callingAET, String calledAET) throws SQLException {
+  public UUID getAuthorization(String callingAET, String calledAET) throws DicomServiceException {
     try (Connection conn = dataSource.getConnection();
         PreparedStatement stmt = conn.prepareStatement(SQL_CHECK_AUTHORIZATION)) {
 
@@ -128,10 +137,16 @@ public class DatabaseConfigService {
       stmt.setString(2, calledAET);
 
       try (ResultSet rs = stmt.executeQuery()) {
-        boolean authorized = rs.next();
-        log.debug("Authorization check for calling_aet={}, called_aet={}: {}",
-            callingAET, calledAET, authorized ? "AUTHORIZED" : "DENIED");
-        return authorized;
+        if (rs.next()) {
+          String deviceIdStr = rs.getString("id");
+          UUID deviceId = UUID.fromString(deviceIdStr);
+          log.debug("Authorization successful for calling_aet={}, called_aet={}, device_id={}",
+              callingAET, calledAET, deviceId);
+          return deviceId;
+        }
+        log.warn("Authorization denied for calling_aet={}, called_aet={}", callingAET, calledAET);
+        throw new DicomServiceException(Status.NotAuthorized,
+            "Not authorized: calling_aet=" + callingAET + ", called_aet=" + calledAET);
       }
     } catch (SQLException e) {
       log.error("Database error during authorization check for calling_aet={}, called_aet={}",
@@ -139,7 +154,7 @@ public class DatabaseConfigService {
       if (sentryEnabled) {
         Sentry.captureException(e);
       }
-      throw e;
+      throw new DicomServiceException(Status.ProcessingFailure, e);
     }
   }
 

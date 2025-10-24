@@ -1,58 +1,51 @@
 -- Database initialization script for DICOM Adapter Dynamic Configuration
 -- This script creates tables and indexes for:
--- 1. AET Authorization
+-- 1. Device Authorization
 -- 2. AET Storage Mapping
 -- 3. Study Storage Mapping
--- Create AET Authorization table
+-- Create Device Authorization table
 -- Stores authorized calling AET and called AET pairs
-CREATE TABLE IF NOT EXISTS aet_authorization (
-    calling_aet VARCHAR(16) PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS dicom_device (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    calling_aet VARCHAR(16) NOT NULL,
     called_aet VARCHAR(16) NOT NULL,
+    name VARCHAR(255),
+    description TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (calling_aet, called_aet)
 );
 
--- Index for searching by called_aet
-CREATE INDEX IF NOT EXISTS idx_aet_authorization_called ON aet_authorization(called_aet);
 
--- Comment table
-COMMENT ON TABLE aet_authorization IS 'Authorized DICOM AET pairs for incoming associations';
-
-COMMENT ON COLUMN aet_authorization.calling_aet IS 'Calling Application Entity Title from client';
-
-COMMENT ON COLUMN aet_authorization.called_aet IS 'Called Application Entity Title (adapter AET)';
-
--- Create AET Storage Mapping table
--- Defines default storage destinations per calling AET
-CREATE TABLE IF NOT EXISTS aet_storage (
-    aet VARCHAR(16) PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS dicom_destination (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     dicomweb_destination VARCHAR(255) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (dicomweb_destination)
 );
 
--- Comment table
-COMMENT ON TABLE aet_storage IS 'Default DICOMweb storage destination per AET';
 
-COMMENT ON COLUMN aet_storage.aet IS 'Application Entity Title';
-
-COMMENT ON COLUMN aet_storage.dicomweb_destination IS 'Full DICOMweb URL (e.g., https://...../dicomWeb)';
+-- Defines default storage destinations per device
+CREATE TABLE IF NOT EXISTS dicom_device_destination (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id UUID NOT NULL,
+    dicomweb_destination UUID NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_device_destination_device FOREIGN KEY (device_id) REFERENCES dicom_device(id) ON DELETE CASCADE ON UPDATE CASCADE
+    CONSTRAINT fk_device_destination_destination FOREIGN KEY (dicomweb_destination) REFERENCES dicom_destination(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
 
 -- Create Study Storage Mapping table
 -- Auto-populated by adapter when first object of a study is received
-CREATE TABLE IF NOT EXISTS study_storage (
+CREATE TABLE IF NOT EXISTS dicom_study_destination (
     study_uid VARCHAR(64) PRIMARY KEY,
-    dicomweb_destination VARCHAR(255) NOT NULL,
+    dicomweb_destination UUID NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_study_destination_destination FOREIGN KEY (dicomweb_destination) REFERENCES dicom_destination(id) ON DELETE CASCADE ON UPDATE CASCADE
 );
-
--- Comment table
-COMMENT ON TABLE study_storage IS 'Study-to-storage mapping, automatically populated by adapter';
-
-COMMENT ON COLUMN study_storage.study_uid IS 'DICOM StudyInstanceUID';
-
-COMMENT ON COLUMN study_storage.dicomweb_destination IS 'DICOMweb URL where study is stored';
 
 -- Create trigger to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -64,35 +57,15 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Apply trigger to all tables
-CREATE TRIGGER update_aet_authorization_updated_at BEFORE
+CREATE TRIGGER update_device_updated_at BEFORE
 UPDATE
-    ON aet_authorization FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    ON dicom_device FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_aet_storage_updated_at BEFORE
+CREATE TRIGGER update_device_destination_updated_at BEFORE
 UPDATE
-    ON aet_storage FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    ON dicom_device_destination FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_study_storage_updated_at BEFORE
+CREATE TRIGGER update_study_destination_updated_at BEFORE
 UPDATE
-    ON study_storage FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- Insert example data (OPTIONAL - comment out for production)
--- Example 1: Hospital A
--- INSERT INTO aet_authorization (calling_aet, called_aet)
--- VALUES ('HOSPITAL_A', 'PRAXIUM')
--- ON CONFLICT (calling_aet) DO NOTHING;
--- INSERT INTO aet_storage (aet, dicomweb_destination)
--- VALUES ('HOSPITAL_A', 'https://healthcare.googleapis.com/v1/projects/project-a/locations/us-central1/datasets/dataset-a/dicomStores/store-a/dicomWeb')
--- ON CONFLICT (aet) DO NOTHING;
--- -- Example 2: Hospital B
--- INSERT INTO aet_authorization (calling_aet, called_aet)
--- VALUES ('HOSPITAL_B', 'PRAXIUM')
--- ON CONFLICT (calling_aet) DO NOTHING;
--- INSERT INTO aet_storage (aet, dicomweb_destination)
--- VALUES ('HOSPITAL_B', 'https://healthcare.googleapis.com/v1/projects/project-b/locations/us-central1/datasets/dataset-b/dicomStores/store-b/dicomWeb')
--- ON CONFLICT (aet) DO NOTHING;
--- -- Example 3: Modality 01
--- INSERT INTO aet_authorization (calling_aet, called_aet)
--- VALUES ('MODALITY_01', 'PRAXIUM')
--- ON CONFLICT (calling_aet) DO NOTHING;
+    ON dicom_study_destination FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
