@@ -73,25 +73,91 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
     this.useHttp2ForStow = useHttp2ForStow;
   }
 
+  /**
+   * Simple TeeInputStream implementation that writes all data read from source
+   * into a secondary output stream (like ByteArrayOutputStream for buffering).
+   *
+   * This allows us to read metadata while simultaneously buffering it for later replay.
+   */
+  private static class TeeInputStream extends java.io.InputStream {
+    private final java.io.InputStream source;
+    private final java.io.OutputStream sink;
+
+    public TeeInputStream(java.io.InputStream source, java.io.OutputStream sink) {
+      this.source = source;
+      this.sink = sink;
+    }
+
+    @Override
+    public int read() throws java.io.IOException {
+      int b = source.read();
+      if (b != -1) {
+        sink.write(b);
+      }
+      return b;
+    }
+
+    @Override
+    public int read(byte[] b, int off, int len) throws java.io.IOException {
+      int n = source.read(b, off, len);
+      if (n > 0) {
+        sink.write(b, off, n);
+      }
+      return n;
+    }
+
+    @Override
+    public void close() throws java.io.IOException {
+      source.close();
+    }
+  }
+
   @Override
   public DestinationHolder create(String callingAet, String transferSyntax,
       java.io.InputStream inPdvStream) throws java.io.IOException {
 
-    // Create a buffered/markable stream to read DICOM attributes
-    org.dcm4che3.io.DicomInputStream dicomInputStream =
+    // For database routing, we need StudyInstanceUID (0020,000D) from stream.
+    //
+    // PROBLEM: Direct mark/reset on BufferedInputStream(PDVInputStream) is unreliable because:
+    // 1. PDVInputStream is a network stream that doesn't support mark/reset natively
+    // 2. DicomInputStream.readDataset() does complex parsing (VR correction, error recovery)
+    //    that can "corrupt" data in BufferedInputStream buffer
+    // 3. Even after reset(), the corrupted state remains
+    //
+    // SOLUTION: Buffer metadata using TeeInputStream + SequenceInputStream:
+    // 1. Create ByteArrayOutputStream to buffer metadata as we read it
+    // 2. Wrap inPdvStream with TeeInputStream that writes to buffer
+    // 3. Read metadata through TeeInputStream - data is simultaneously buffered
+    // 4. Create SequenceInputStream(buffer + remaining stream) for upload
+    // 5. This ensures we can read metadata AND send complete file without race conditions
+
+    // 1. Create buffer for metadata (typically < 64KB for DICOM headers)
+    java.io.ByteArrayOutputStream metadataBuffer = new java.io.ByteArrayOutputStream();
+
+    // 2. Create TeeInputStream that writes everything it reads into the buffer
+    java.io.InputStream teeStream = new TeeInputStream(inPdvStream, metadataBuffer);
+
+    // 3. Read attributes from TeeInputStream
+    //    As we read, data is simultaneously written to metadataBuffer
+    Attributes attrs;
+    String studyInstanceUID;
+    try (org.dcm4che3.io.DicomInputStream tempStream =
         new org.dcm4che3.io.DicomInputStream(
-            new java.io.BufferedInputStream(inPdvStream), transferSyntax);
+            new java.io.BufferedInputStream(teeStream), transferSyntax)) {
+      attrs = tempStream.readDataset(-1, Tag.PixelData);
+      studyInstanceUID = attrs.getString(Tag.StudyInstanceUID);
+    }
 
-    // Read attributes up to PixelData to extract StudyInstanceUID
-    dicomInputStream.mark(Integer.MAX_VALUE);
-    Attributes attrs = dicomInputStream.readDataset(-1, Tag.PixelData);
-    dicomInputStream.reset();
-
-    String studyInstanceUID = attrs.getString(Tag.StudyInstanceUID);
+    // 4. Create "rewindable" stream for sending:
+    //    First read from buffer (metadata), then continue from original stream (pixel data)
+    java.io.InputStream streamForSending = new java.io.SequenceInputStream(
+        new java.io.ByteArrayInputStream(metadataBuffer.toByteArray()),
+        inPdvStream // Continues from where TeeInputStream left off (after PixelData tag)
+    );
 
     if (studyInstanceUID == null || studyInstanceUID.isEmpty()) {
       log.warn("StudyInstanceUID not found in DICOM attributes. Using default destination.");
-      return new DestinationHolder(dicomInputStream, defaultDicomWebClient);
+      return new DestinationHolder(streamForSending, defaultDicomWebClient);
     }
 
     try {
@@ -102,7 +168,7 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
         log.debug("Found destination for study_uid={} in study_storage: {}",
             studyInstanceUID, destination);
         IDicomWebClient client = getOrCreateClient(destination);
-        DestinationHolder holder = new DestinationHolder(dicomInputStream, defaultDicomWebClient);
+        DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
         holder.setSingleDestination(client);
         return holder;
       }
@@ -124,7 +190,7 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
         }
 
         IDicomWebClient client = getOrCreateClient(destination);
-        DestinationHolder holder = new DestinationHolder(dicomInputStream, defaultDicomWebClient);
+        DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
         holder.setSingleDestination(client);
         return holder;
       }
@@ -132,13 +198,13 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
       // Step 4: No database routing found, use default
       log.debug("No database routing found for study_uid={}, aet={}. Using default destination.",
           studyInstanceUID, callingAet);
-      return new DestinationHolder(dicomInputStream, defaultDicomWebClient);
+      return new DestinationHolder(streamForSending, defaultDicomWebClient);
 
     } catch (SQLException e) {
       log.error("Database error during destination routing for study_uid={}, aet={}. " +
           "Using default destination.", studyInstanceUID, callingAet, e);
       // On database errors, fall back to default destination rather than failing the request
-      return new DestinationHolder(dicomInputStream, defaultDicomWebClient);
+      return new DestinationHolder(streamForSending, defaultDicomWebClient);
     }
   }
 
