@@ -181,6 +181,29 @@ docker run -d \
   --dicomweb_address=https://healthcare.googleapis.com/v1/...
 ```
 
+#### Supported TLS Versions and Cipher Suites
+
+The adapter supports a wide range of TLS protocols and cipher suites for compatibility with medical devices:
+
+**TLS Versions:**
+
+-   TLSv1.3 (recommended)
+-   TLSv1.2 (common)
+-   TLSv1.1 (legacy)
+-   TLSv1 (legacy, for older devices like Horos)
+
+**Cipher Suites (strongest to weakest):**
+
+-   TLS 1.3: `TLS_AES_256_GCM_SHA384`, `TLS_AES_128_GCM_SHA256`
+-   ECDHE: `TLS_ECDHE_RSA_WITH_AES_*` (forward secrecy)
+-   RSA: `TLS_RSA_WITH_AES_*` (common in medical devices)
+-   DHE: `TLS_DHE_RSA_WITH_AES_*`, `TLS_DHE_DSS_WITH_AES_*` (Horos compatibility)
+-   3DES: `TLS_*_WITH_3DES_EDE_CBC_SHA` (legacy devices only)
+
+**Not supported** (critically insecure): RC4, MD5, NULL, DES (non-3DES), EXPORT, anonymous ciphers
+
+For detailed cipher suite configuration and medical device compatibility, see [DeviceUtil.java](util/src/main/java/com/google/cloud/healthcare/imaging/dicomadapter/DeviceUtil.java).
+
 #### Security Best Practices
 
 -   Use certificates from a trusted Certificate Authority (CA) in production
@@ -188,11 +211,17 @@ docker run -d \
 -   Mount certificate files as read-only volumes (`:ro`)
 -   Enable mutual TLS (`--tls_need_client_auth=true`) for enhanced security
 -   Regularly rotate TLS certificates before expiration
--   Use TLS 1.2 or higher (automatically enforced)
+-   Prefer TLS 1.2+ when possible (TLSv1/1.1 provided for legacy compatibility)
 
 #### Client Configuration
 
 Clients connecting to the TLS port must trust the server's certificate. For self-signed certificates (testing only), configure the client's truststore to include the server certificate.
+
+**Medical Device Configuration Examples:**
+
+-   **Horos**: Use `TLS_RSA_WITH_AES_256_CBC_SHA` or `TLS_DHE_RSA_WITH_AES_256_CBC_SHA`
+-   **iCAD**: Auto-negotiate (adapter will select strongest common cipher)
+-   **Legacy PACS**: May require TLSv1 with `TLS_RSA_WITH_3DES_EDE_CBC_SHA`
 
 ## Export Adapter
 

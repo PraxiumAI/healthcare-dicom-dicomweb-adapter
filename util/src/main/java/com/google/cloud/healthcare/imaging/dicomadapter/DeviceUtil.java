@@ -137,7 +137,48 @@ public class DeviceUtil {
         }
 
         // Enable TLS on this specific connection
-        tlsConnection.setTlsProtocols("TLSv1.2");
+        // Support TLSv1, TLSv1.1, TLSv1.2 and TLSv1.3 for maximum compatibility with medical devices
+        tlsConnection.setTlsProtocols("TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3");
+
+        // Set cipher suites compatible with medical devices (Horos, iCAD, etc.)
+        // Includes legacy weak ciphers for compatibility with older DICOM viewers
+        // Ordered by preference (strongest first, but Java will negotiate with client)
+        tlsConnection.setTlsCipherSuites(
+            // TLSv1.3 ciphers (strongest, modern devices)
+            "TLS_AES_256_GCM_SHA384",
+            "TLS_AES_128_GCM_SHA256",
+
+            // TLSv1.2 ECDHE ciphers (forward secrecy)
+            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384",
+            "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+            "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+            "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+
+            // TLSv1.2/1.0 RSA with AES (common in medical devices)
+            "TLS_RSA_WITH_AES_256_GCM_SHA384",
+            "TLS_RSA_WITH_AES_128_GCM_SHA256",
+            "TLS_RSA_WITH_AES_256_CBC_SHA256",
+            "TLS_RSA_WITH_AES_128_CBC_SHA256",
+            "TLS_RSA_WITH_AES_256_CBC_SHA",
+            "TLS_RSA_WITH_AES_128_CBC_SHA",
+
+            // Diffie-Hellman variants (Horos compatibility)
+            "TLS_DHE_RSA_WITH_AES_256_CBC_SHA",
+            "TLS_DHE_RSA_WITH_AES_128_CBC_SHA",
+            "TLS_DHE_DSS_WITH_AES_256_CBC_SHA",
+            "TLS_DHE_DSS_WITH_AES_128_CBC_SHA",
+
+            // Legacy 3DES ciphers (weak but required for old devices like Horos)
+            "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+            "TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA",
+            "TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA"
+
+            // NOTE: RC4, MD5, NULL and DES (non-3DES) ciphers are NOT included
+            // as they are critically insecure and disabled in modern Java versions
+        );
+
         tlsConnection.setTlsNeedClientAuth(tlsNeedClientAuth);
 
         device.addConnection(tlsConnection);
