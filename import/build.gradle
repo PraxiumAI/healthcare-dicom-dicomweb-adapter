@@ -160,14 +160,14 @@ dockerCreateDockerfile {
 task generateBuildInfo {
     doLast {
         def gitDir = file(rootProject.projectDir.toString() + "/.git")
-        def commit = "unknown"
+        def commit = System.getenv("GITHUB_SHA") ?: System.getenv("GIT_COMMIT") ?: "unknown"
         if (gitDir.exists()) {
-            def headFile = file(gitDir, "HEAD")
+            def headFile = new File(gitDir, "HEAD")
             if (headFile.exists()) {
                 def head = headFile.text.trim()
                 if (head.startsWith("ref:")) {
                     def refPath = head.substring(5).trim()
-                    def refFile = file(gitDir, refPath)
+                    def refFile = new File(gitDir, refPath)
                     if (refFile.exists()) {
                         commit = refFile.text.trim()
                     }
