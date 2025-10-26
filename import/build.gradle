@@ -155,3 +155,44 @@ dockerCreateDockerfile {
     instruction 'ADD source /usr/share/oss-source'
 }
 
+
+// Generate build-info.properties with git commit and build time for runtime logging
+task generateBuildInfo {
+    doLast {
+        def gitDir = file(rootProject.projectDir.toString() + "/.git")
+        def commit = "unknown"
+        if (gitDir.exists()) {
+            def headFile = file(gitDir, "HEAD")
+            if (headFile.exists()) {
+                def head = headFile.text.trim()
+                if (head.startsWith("ref:")) {
+                    def refPath = head.substring(5).trim()
+                    def refFile = file(gitDir, refPath)
+                    if (refFile.exists()) {
+                        commit = refFile.text.trim()
+                    }
+                } else {
+                    // Detached HEAD contains the commit SHA directly
+                    commit = head
+                }
+            }
+        }
+
+        def shortCommit = commit != "unknown" ? commit.substring(0, Math.min(7, commit.length())) : "unknown"
+        def buildTime = new Date().format("yyyy-MM-dd'T'HH:mm:ssXXX")
+
+        def outDir = file("${buildDir}/resources/main")
+        outDir.mkdirs()
+        def propsFile = new File(outDir, "build-info.properties")
+        propsFile.text = """
+commit=${commit}
+shortCommit=${shortCommit}
+buildTime=${buildTime}
+version=${project.version}
+module=import
+""".trim() + "\n"
+    }
+}
+
+processResources.dependsOn generateBuildInfo
+

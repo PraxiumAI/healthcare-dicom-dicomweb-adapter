@@ -101,6 +101,15 @@ public class CStoreService extends BasicCStoreSCP {
     if(!this.privateTagConfigs.isEmpty()) {
       log.info("Private tags configured: " + this.privateTagConfigs.size() + " tags will be added during C-STORE");
     }
+
+    // Log build info to confirm runtime code version
+    try {
+      String shortSha = BuildInfo.shortCommit();
+      String time = BuildInfo.buildTime();
+      String ver = BuildInfo.version();
+      log.info("Import Adapter build: version={}, commit={}, builtAt={}", ver, shortSha, time);
+    } catch (Throwable ignored) {
+    }
   }
 
   @Override
