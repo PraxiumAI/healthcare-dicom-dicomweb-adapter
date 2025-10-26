@@ -44,20 +44,20 @@ public class DatabaseConfigService {
 
   private static final String SQL_GET_STORAGE_FOR_STUDY =
       "SELECT dest.dicomweb_destination FROM dicom_study_destination sd "
-          + "JOIN dicom_destination dest ON sd.dicomweb_destination = dest.id "
+          + "JOIN dicom_destination dest ON sd.dicomweb_destination_id = dest.id "
           + "WHERE sd.study_uid = ? LIMIT 1";
 
   private static final String SQL_GET_STORAGE_FOR_AET =
       "SELECT dest.dicomweb_destination FROM dicom_device_destination dd "
           + "JOIN dicom_device dev ON dd.device_id = dev.id "
-          + "JOIN dicom_destination dest ON dd.dicomweb_destination = dest.id "
+          + "JOIN dicom_destination dest ON dd.dicomweb_destination_id = dest.id "
           + "WHERE dev.calling_aet = ? LIMIT 1";
 
   private static final String SQL_MAP_STUDY_TO_STORAGE =
-      "INSERT INTO dicom_study_destination (study_uid, dicomweb_destination) "
+      "INSERT INTO dicom_study_destination (study_uid, dicomweb_destination_id) "
           + "SELECT ?, id FROM dicom_destination WHERE dicomweb_destination = ? "
           + "ON CONFLICT (study_uid) DO UPDATE "
-          + "SET dicomweb_destination = (SELECT id FROM dicom_destination WHERE dicomweb_destination = EXCLUDED.dicomweb_destination)";
+          + "SET dicomweb_destination_id = (SELECT id FROM dicom_destination WHERE dicomweb_destination = EXCLUDED.dicomweb_destination)";
 
   /**
    * Creates a new DatabaseConfigService with the specified configuration.

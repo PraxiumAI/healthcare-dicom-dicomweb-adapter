@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS dicom_destination (
 CREATE TABLE IF NOT EXISTS dicom_device_destination (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     device_id UUID NOT NULL,
-    dicomweb_destination UUID NOT NULL,
+    dicomweb_destination_id UUID NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_device_destination_device FOREIGN KEY (device_id) REFERENCES dicom_device(id) ON DELETE CASCADE ON UPDATE CASCADE
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS dicom_device_destination (
 -- Auto-populated by adapter when first object of a study is received
 CREATE TABLE IF NOT EXISTS dicom_study_destination (
     study_uid VARCHAR(64) PRIMARY KEY,
-    dicomweb_destination UUID NOT NULL,
+    dicomweb_destination_id UUID NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_study_destination_destination FOREIGN KEY (dicomweb_destination) REFERENCES dicom_destination(id) ON DELETE CASCADE ON UPDATE CASCADE
