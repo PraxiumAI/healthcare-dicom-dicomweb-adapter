@@ -23,6 +23,7 @@ import com.google.cloud.healthcare.DicomWebClientJetty;
 import com.google.cloud.healthcare.IDicomWebClient;
 import com.google.cloud.healthcare.StringUtil;
 import com.google.cloud.healthcare.imaging.dicomadapter.DatabaseConfigService;
+import com.google.cloud.healthcare.imaging.dicomadapter.cstore.DicomStreamUtil;
 import java.sql.SQLException;
 import java.util.concurrent.ConcurrentHashMap;
 import org.dcm4che3.data.Attributes;
@@ -73,44 +74,6 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
     this.useHttp2ForStow = useHttp2ForStow;
   }
 
-  /**
-   * Simple TeeInputStream implementation that writes all data read from source
-   * into a secondary output stream (like ByteArrayOutputStream for buffering).
-   *
-   * This allows us to read metadata while simultaneously buffering it for later replay.
-   */
-  private static class TeeInputStream extends java.io.InputStream {
-    private final java.io.InputStream source;
-    private final java.io.OutputStream sink;
-
-    public TeeInputStream(java.io.InputStream source, java.io.OutputStream sink) {
-      this.source = source;
-      this.sink = sink;
-    }
-
-    @Override
-    public int read() throws java.io.IOException {
-      int b = source.read();
-      if (b != -1) {
-        sink.write(b);
-      }
-      return b;
-    }
-
-    @Override
-    public int read(byte[] b, int off, int len) throws java.io.IOException {
-      int n = source.read(b, off, len);
-      if (n > 0) {
-        sink.write(b, off, n);
-      }
-      return n;
-    }
-
-    @Override
-    public void close() throws java.io.IOException {
-      source.close();
-    }
-  }
 
   @Override
   public DestinationHolder create(String callingAet, String transferSyntax,
@@ -135,7 +98,7 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
     java.io.ByteArrayOutputStream metadataBuffer = new java.io.ByteArrayOutputStream();
 
     // 2. Create TeeInputStream that writes everything it reads into the buffer
-    java.io.InputStream teeStream = new TeeInputStream(inPdvStream, metadataBuffer);
+    java.io.InputStream teeStream = new DicomStreamUtil.TeeInputStream(inPdvStream, metadataBuffer);
 
     // 3. Read attributes from TeeInputStream
     //    As we read, data is simultaneously written to metadataBuffer

@@ -18,6 +18,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.SequenceInputStream;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.UID;
@@ -45,6 +46,47 @@ public class DicomStreamUtil {
     // Add the file meta header + DICOM dataset (other groups) as a sequence of input streams.
     return new SequenceInputStream(
         new ByteArrayInputStream(outBuffer.toByteArray()), inDicomStream);
+  }
+
+  /**
+   * TeeInputStream implementation that writes all data read from source
+   * into a secondary output stream (like ByteArrayOutputStream for buffering).
+   *
+   * This allows reading metadata while simultaneously buffering it for later replay.
+   * Used to solve the problem of reading DICOM attributes from network streams without
+   * losing data when the stream needs to be forwarded/replayed.
+   */
+  public static class TeeInputStream extends InputStream {
+    private final InputStream source;
+    private final OutputStream sink;
+
+    public TeeInputStream(InputStream source, OutputStream sink) {
+      this.source = source;
+      this.sink = sink;
+    }
+
+    @Override
+    public int read() throws IOException {
+      int b = source.read();
+      if (b != -1) {
+        sink.write(b);
+      }
+      return b;
+    }
+
+    @Override
+    public int read(byte[] b, int off, int len) throws IOException {
+      int n = source.read(b, off, len);
+      if (n > 0) {
+        sink.write(b, off, n);
+      }
+      return n;
+    }
+
+    @Override
+    public void close() throws IOException {
+      source.close();
+    }
   }
 
   private DicomStreamUtil() {}

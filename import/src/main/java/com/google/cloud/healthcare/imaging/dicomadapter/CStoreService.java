@@ -27,6 +27,7 @@ import com.google.cloud.healthcare.imaging.dicomadapter.monitoring.MonitoringSer
 import com.google.common.io.CountingInputStream;
 import io.sentry.Sentry;
 import io.sentry.SentryLevel;
+import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -369,11 +370,37 @@ public class CStoreService extends BasicCStoreSCP {
       return;
     }
 
-    DicomInputStream dis = new DicomInputStream(inputStream);
-    Attributes fmi = dis.readFileMetaInformation();
-    Attributes dataset = dis.readDataset(-1, -1);
+    // Use TeeInputStream approach to avoid loading large pixel data into memory
+    // This is the same solution used in DatabaseDestinationClientFactory.create()
+    //
+    // PROBLEM: Direct reading with DicomInputStream.readDataset(-1, -1) loads entire file
+    // including 10+ MB of pixel data, causing EOFException on network streams
+    //
+    // SOLUTION: Buffer metadata using TeeInputStream + SequenceInputStream:
+    // 1. Create ByteArrayOutputStream to buffer metadata as we read it
+    // 2. Wrap inputStream with TeeInputStream that writes to buffer
+    // 3. Read metadata through TeeInputStream - data is simultaneously buffered
+    // 4. Add private tags to the buffered metadata
+    // 5. Write modified metadata to output stream
+    // 6. Copy remaining stream (pixel data) without parsing
 
-    // Add all configured private tags
+    // 1. Create buffer for metadata (typically < 64KB for DICOM headers)
+    ByteArrayOutputStream metadataBuffer = new ByteArrayOutputStream();
+
+    // 2. Create TeeInputStream that writes everything it reads into the buffer
+    InputStream teeStream = new DicomStreamUtil.TeeInputStream(inputStream, metadataBuffer);
+
+    // 3. Read attributes from TeeInputStream (metadata is simultaneously buffered)
+    Attributes fmi;
+    Attributes dataset;
+    try (DicomInputStream dis = new DicomInputStream(
+        new BufferedInputStream(teeStream), transferSyntax)) {
+      fmi = dis.readFileMetaInformation();
+      // Read only up to PixelData tag to avoid loading large pixel arrays
+      dataset = dis.readDataset(-1, Tag.PixelData);
+    }
+
+    // 4. Add all configured private tags
     for (ImportAdapter.PrivateTagConfig config : privateTagConfigs) {
       try {
         String value = resolveVariables(config.getValueTemplate(), association);
@@ -384,7 +411,7 @@ public class CStoreService extends BasicCStoreSCP {
       }
     }
 
-    // Write modified DICOM with proper transfer syntax handling
+    // 5. Write modified DICOM with proper transfer syntax handling
     // Force Explicit VR Little Endian to preserve VR for private tags
     // If original file was Implicit VR, convert to Explicit VR
     // Otherwise keep original transfer syntax (e.g., compressed formats)
@@ -400,14 +427,14 @@ public class CStoreService extends BasicCStoreSCP {
       fmi.setString(Tag.TransferSyntaxUID, VR.UI, finalTransferSyntax);
     }
 
-    // Use ByteArrayOutputStream as intermediate buffer to handle transfer syntax properly
-    ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-    try (DicomOutputStream dos = new DicomOutputStream(buffer, UID.ExplicitVRLittleEndian)) {
-      dos.writeDataset(fmi, dataset);
-    }
+    // Write the modified metadata (file meta info + dataset with private tags)
+    DicomOutputStream dos = new DicomOutputStream(outputStream, finalTransferSyntax);
+    dos.writeDataset(fmi, dataset);
+    dos.flush();
 
-    // Write buffered data to output
-    buffer.writeTo(outputStream);
+    // 6. Copy remaining stream (pixel data and anything after) without parsing
+    // This avoids loading large pixel arrays into memory
+    StreamUtils.copy(inputStream, outputStream);
   }
 
   private void processStream(Executor underlyingExecutor, InputStream inputStream,
