@@ -40,11 +40,12 @@ jobs:
         uses: gradle/gradle-build-action@v2
         with:
           gradle-version: '8.5'
+          cache-disabled: true
 
       - name: Build adapter with Gradle
         run: |
           cd ${{ matrix.adapter }}
-          gradle build --no-daemon -x test
+          gradle clean build --no-daemon -x test
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -74,9 +75,9 @@ jobs:
       - name: Build Docker image with Gradle
         run: |
           cd ${{ matrix.adapter }}
-          gradle dockerBuildImage \
+          gradle clean dockerBuildImage \
             -Pdocker_tag=${{ steps.meta.outputs.image_name }}:latest \
-            --no-daemon
+            --no-daemon --no-build-cache
 
       - name: Tag and push Docker images
         run: |
