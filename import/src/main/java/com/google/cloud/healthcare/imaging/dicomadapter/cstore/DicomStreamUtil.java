@@ -85,7 +85,12 @@ public class DicomStreamUtil {
 
     @Override
     public void close() throws IOException {
-      source.close();
+      // Do not close the underlying source here; callers manage stream lifecycle.
+      // Flushing sink ensures buffered bytes are written when used with ByteArrayOutputStream.
+      try {
+        sink.flush();
+      } catch (IOException ignored) {
+      }
     }
   }
 

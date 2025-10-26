@@ -102,6 +102,14 @@ public class CStoreService extends BasicCStoreSCP {
       log.info("Private tags configured: " + this.privateTagConfigs.size() + " tags will be added during C-STORE");
     }
 
+    if (log.isDebugEnabled()) {
+      log.debug("C-STORE pipeline: redactor={}, addPrivateTags={}, transcodeTo={}, multiDest={}",
+          this.redactor != null,
+          !this.privateTagConfigs.isEmpty(),
+          this.transcodeToSyntax,
+          this.multipleSendService != null);
+    }
+
     // Log build info to confirm runtime code version
     try {
       String shortSha = BuildInfo.shortCommit();
@@ -379,6 +387,11 @@ public class CStoreService extends BasicCStoreSCP {
       return;
     }
 
+    log.debug("addPrivateTags: start, callingAET={}, calledAET={}, ts={}",
+        association.getAAssociateAC().getCallingAET(),
+        association.getAAssociateAC().getCalledAET(),
+        transferSyntax);
+
     // Use TeeInputStream approach to avoid loading large pixel data into memory
     // This is the same solution used in DatabaseDestinationClientFactory.create()
     //
@@ -403,10 +416,21 @@ public class CStoreService extends BasicCStoreSCP {
     Attributes fmi;
     Attributes dataset;
     try (DicomInputStream dis = new DicomInputStream(
-        new BufferedInputStream(teeStream), transferSyntax)) {
+        new BufferedInputStream(teeStream))) { // allow detection from FMI
       fmi = dis.readFileMetaInformation();
       // Read only up to PixelData tag to avoid loading large pixel arrays
       dataset = dis.readDataset(-1, Tag.PixelData);
+    } catch (IOException e) {
+      log.error("addPrivateTags: failed to read attributes (metaBuf={} bytes, ts={})",
+          metadataBuffer.size(), transferSyntax, e);
+      throw e;
+    }
+
+    if (log.isDebugEnabled()) {
+      String fmiTs = fmi != null ? fmi.getString(Tag.TransferSyntaxUID) : "<none>";
+      boolean hasPixelData = dataset != null && dataset.contains(Tag.PixelData);
+      log.debug("addPrivateTags: read ok (fmiTS={}, datasetTags={}, hasPixelData={}, metaBuf={} bytes)",
+          fmiTs, dataset != null ? dataset.size() : 0, hasPixelData, metadataBuffer.size());
     }
 
     // 4. Add all configured private tags
@@ -440,10 +464,12 @@ public class CStoreService extends BasicCStoreSCP {
     DicomOutputStream dos = new DicomOutputStream(outputStream, finalTransferSyntax);
     dos.writeDataset(fmi, dataset);
     dos.flush();
+    log.debug("addPrivateTags: wrote dataset (finalTS={})", finalTransferSyntax);
 
     // 6. Copy remaining stream (pixel data and anything after) without parsing
     // This avoids loading large pixel arrays into memory
     StreamUtils.copy(inputStream, outputStream);
+    log.debug("addPrivateTags: copied remaining stream to output");
   }
 
   private void processStream(Executor underlyingExecutor, InputStream inputStream,
