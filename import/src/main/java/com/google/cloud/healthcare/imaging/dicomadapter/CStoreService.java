@@ -419,7 +419,7 @@ public class CStoreService extends BasicCStoreSCP {
     //    BufferedInputStream would read ahead and buffer data that doesn't get written to metadataBuffer
     Attributes fmi;
     Attributes dataset;
-    try (DicomInputStream dis = new DicomInputStream(teeStream)) {
+    try (DicomInputStream dis = new DicomInputStream(teeStream, transferSyntax)) {
       fmi = dis.readFileMetaInformation();
       // Read only up to PixelData tag to avoid loading large pixel arrays
       dataset = dis.readDataset(-1, Tag.PixelData);
@@ -448,15 +448,11 @@ public class CStoreService extends BasicCStoreSCP {
     }
 
     // 5. Write modified DICOM with proper transfer syntax handling
-    // Force Explicit VR Little Endian to preserve VR for private tags
-    // If original file was Implicit VR, convert to Explicit VR
-    // Otherwise keep original transfer syntax (e.g., compressed formats)
+    // Keep the original transfer syntax to ensure the appended PixelData element
+    // remains consistent with the dataset encoding that precedes it.
+    // Changing TS here (e.g., Implicit -> Explicit) would require re-encoding PixelData,
+    // which we intentionally avoid for streaming performance and memory safety.
     String finalTransferSyntax = transferSyntax;
-
-    if (UID.ImplicitVRLittleEndian.equals(transferSyntax)) {
-      // Convert Implicit VR to Explicit VR to preserve private tag VRs
-      finalTransferSyntax = UID.ExplicitVRLittleEndian;
-    }
 
     // Update FMI with the final transfer syntax
     if (fmi != null) {
