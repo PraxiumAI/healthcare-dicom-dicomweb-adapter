@@ -81,16 +81,13 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
 
     // For database routing, we need StudyInstanceUID (0020,000D) from stream.
     //
-    // PROBLEM: Direct mark/reset on BufferedInputStream(PDVInputStream) is unreliable because:
-    // 1. PDVInputStream is a network stream that doesn't support mark/reset natively
-    // 2. DicomInputStream.readDataset() does complex parsing (VR correction, error recovery)
-    //    that can "corrupt" data in BufferedInputStream buffer
-    // 3. Even after reset(), the corrupted state remains
+    // PROBLEM: PDVInputStream is a network stream that cannot be rewound (no mark/reset)
     //
     // SOLUTION: Buffer metadata using TeeInputStream + SequenceInputStream:
     // 1. Create ByteArrayOutputStream to buffer metadata as we read it
     // 2. Wrap inPdvStream with TeeInputStream that writes to buffer
-    // 3. Read metadata through TeeInputStream - data is simultaneously buffered
+    // 3. Read metadata through TeeInputStream WITHOUT BufferedInputStream wrapper
+    //    (BufferedInputStream would buffer extra data that doesn't get written to buffer!)
     // 4. Create SequenceInputStream(buffer + remaining stream) for upload
     // 5. This ensures we can read metadata AND send complete file without race conditions
 
@@ -101,21 +98,21 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
     java.io.InputStream teeStream = new DicomStreamUtil.TeeInputStream(inPdvStream, metadataBuffer);
 
     // 3. Read attributes from TeeInputStream
-    //    As we read, data is simultaneously written to metadataBuffer
+    //    IMPORTANT: Do NOT wrap in BufferedInputStream here!
+    //    BufferedInputStream would read ahead and buffer data that doesn't get written to metadataBuffer
     Attributes attrs;
     String studyInstanceUID;
     try (org.dcm4che3.io.DicomInputStream tempStream =
-        new org.dcm4che3.io.DicomInputStream(
-            new java.io.BufferedInputStream(teeStream), transferSyntax)) {
+        new org.dcm4che3.io.DicomInputStream(teeStream, transferSyntax)) {
       attrs = tempStream.readDataset(-1, Tag.PixelData);
       studyInstanceUID = attrs.getString(Tag.StudyInstanceUID);
     }
 
     // 4. Create "rewindable" stream for sending:
-    //    First read from buffer (metadata), then continue from original stream (pixel data)
+    //    First replay buffered metadata, then continue with remaining stream (PixelData)
     java.io.InputStream streamForSending = new java.io.SequenceInputStream(
         new java.io.ByteArrayInputStream(metadataBuffer.toByteArray()),
-        inPdvStream // Continues from where TeeInputStream left off (after PixelData tag)
+        inPdvStream // Continues from where TeeInputStream stopped (at PixelData)
     );
 
     if (studyInstanceUID == null || studyInstanceUID.isEmpty()) {

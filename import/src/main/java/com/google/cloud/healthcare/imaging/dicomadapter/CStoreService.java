@@ -284,36 +284,41 @@ public class CStoreService extends BasicCStoreSCP {
     // For Healthcare API STOW-RS, check if the underlying cause contains "already exists"
     // The response XML includes: <DicomAttribute tag="00090097">already exists</DicomAttribute>
     Throwable cause = e.getCause();
-    if (cause != null) {
-      // Check exception message (includes response body per HttpResponseException docs)
-      String causeMessage = cause.getMessage();
-      if (causeMessage != null && causeMessage.toLowerCase().contains("already exists")) {
-        return true;
-      }
+    String causeMessage = cause != null ? cause.getMessage() : null;
+    String content = null;
 
-      // Also check via getContent() if it's an HttpResponseException
-      if (cause instanceof com.google.api.client.http.HttpResponseException) {
-        try {
-          String content = ((com.google.api.client.http.HttpResponseException) cause).getContent();
-          if (content != null && content.toLowerCase().contains("already exists")) {
-            return true;
-          }
-        } catch (Exception ignored) {
-          // If we can't get content, continue to other checks
-        }
+    // Get response content if available
+    if (cause instanceof com.google.api.client.http.HttpResponseException) {
+      try {
+        content = ((com.google.api.client.http.HttpResponseException) cause).getContent();
+      } catch (Exception ignored) {
+        // If we can't get content, continue to other checks
       }
     }
 
-    // Also check the main DicomWebException message (though it typically won't contain this)
-    String message = e.getMessage();
-    if (message != null && message.toLowerCase().contains("already exists")) {
+    // Check all available messages
+    String exceptionMessage = e.getMessage();
+
+    // Check for "already exists" in all message sources
+    if ((causeMessage != null && causeMessage.toLowerCase().contains("already exists")) ||
+        (content != null && content.toLowerCase().contains("already exists")) ||
+        (exceptionMessage != null && exceptionMessage.toLowerCase().contains("already exists"))) {
       return true;
+    }
+
+    // Check for "resource is too large" errors - these are NOT duplicates
+    // These should propagate as errors with proper status code (272 / 0x0110)
+    if ((causeMessage != null && causeMessage.toLowerCase().contains("resource is too large")) ||
+        (content != null && content.toLowerCase().contains("resource is too large"))) {
+      log.error("DICOM instance exceeds Healthcare API size limit. " +
+                "Exception: {}, Cause: {}", exceptionMessage, causeMessage);
+      return false;
     }
 
     // If we can't confirm it's a duplicate, treat as a different type of 409 conflict
     // and let it propagate as an error
     log.warn("Received HTTP 409 Conflict but cannot confirm it's a duplicate instance. " +
-             "Exception: {}, Cause: {}", e.getMessage(), cause != null ? cause.getMessage() : "null");
+             "Exception: {}, Cause: {}", exceptionMessage, causeMessage);
     return false;
   }
 
@@ -392,19 +397,16 @@ public class CStoreService extends BasicCStoreSCP {
         association.getAAssociateAC().getCalledAET(),
         transferSyntax);
 
-    // Use TeeInputStream approach to avoid loading large pixel data into memory
-    // This is the same solution used in DatabaseDestinationClientFactory.create()
+    // Read metadata without loading large pixel data into memory
     //
-    // PROBLEM: Direct reading with DicomInputStream.readDataset(-1, -1) loads entire file
-    // including 10+ MB of pixel data, causing EOFException on network streams
-    //
-    // SOLUTION: Buffer metadata using TeeInputStream + SequenceInputStream:
+    // SOLUTION: Buffer metadata using TeeInputStream + copy PixelData directly
     // 1. Create ByteArrayOutputStream to buffer metadata as we read it
     // 2. Wrap inputStream with TeeInputStream that writes to buffer
-    // 3. Read metadata through TeeInputStream - data is simultaneously buffered
-    // 4. Add private tags to the buffered metadata
-    // 5. Write modified metadata to output stream
-    // 6. Copy remaining stream (pixel data) without parsing
+    // 3. Read metadata through TeeInputStream WITHOUT BufferedInputStream
+    //    (BufferedInputStream would read ahead and buffer extra data!)
+    // 4. Add private tags to the metadata
+    // 5. Write modified metadata to output
+    // 6. Copy remaining stream (PixelData) directly without parsing
 
     // 1. Create buffer for metadata (typically < 64KB for DICOM headers)
     ByteArrayOutputStream metadataBuffer = new ByteArrayOutputStream();
@@ -412,11 +414,12 @@ public class CStoreService extends BasicCStoreSCP {
     // 2. Create TeeInputStream that writes everything it reads into the buffer
     InputStream teeStream = new DicomStreamUtil.TeeInputStream(inputStream, metadataBuffer);
 
-    // 3. Read attributes from TeeInputStream (metadata is simultaneously buffered)
+    // 3. Read attributes from TeeInputStream
+    //    IMPORTANT: Do NOT wrap in BufferedInputStream here!
+    //    BufferedInputStream would read ahead and buffer data that doesn't get written to metadataBuffer
     Attributes fmi;
     Attributes dataset;
-    try (DicomInputStream dis = new DicomInputStream(
-        new BufferedInputStream(teeStream))) { // allow detection from FMI
+    try (DicomInputStream dis = new DicomInputStream(teeStream)) {
       fmi = dis.readFileMetaInformation();
       // Read only up to PixelData tag to avoid loading large pixel arrays
       dataset = dis.readDataset(-1, Tag.PixelData);
@@ -468,6 +471,7 @@ public class CStoreService extends BasicCStoreSCP {
 
     // 6. Copy remaining stream (pixel data and anything after) without parsing
     // This avoids loading large pixel arrays into memory
+    // inputStream continues from where TeeInputStream stopped (at PixelData)
     StreamUtils.copy(inputStream, outputStream);
     log.debug("addPrivateTags: copied remaining stream to output");
   }

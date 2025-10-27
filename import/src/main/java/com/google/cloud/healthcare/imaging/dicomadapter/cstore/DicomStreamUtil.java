@@ -55,6 +55,16 @@ public class DicomStreamUtil {
    * This allows reading metadata while simultaneously buffering it for later replay.
    * Used to solve the problem of reading DICOM attributes from network streams without
    * losing data when the stream needs to be forwarded/replayed.
+   *
+   * IMPORTANT: This class overrides markSupported() to return true to prevent
+   * DicomInputStream from wrapping it in BufferedInputStream. DicomInputStream has
+   * an ensureMarkSupported() method that automatically wraps streams in BufferedInputStream
+   * if they don't support mark/reset. This would cause data loss because BufferedInputStream
+   * reads ahead in chunks, and the buffered data doesn't get written to the sink.
+   *
+   * By claiming mark support (even though we don't actually implement it), we prevent
+   * the automatic BufferedInputStream wrapping while maintaining the TeeInputStream behavior
+   * of writing all read data to the sink.
    */
   public static class TeeInputStream extends InputStream {
     private final InputStream source;
@@ -81,6 +91,29 @@ public class DicomStreamUtil {
         sink.write(b, off, n);
       }
       return n;
+    }
+
+    @Override
+    public boolean markSupported() {
+      // Return true to prevent DicomInputStream from wrapping us in BufferedInputStream.
+      // We don't actually implement mark/reset, but claiming support prevents the
+      // automatic wrapping that would cause data loss.
+      return true;
+    }
+
+    @Override
+    public void mark(int readlimit) {
+      // No-op: We claim mark support to prevent BufferedInputStream wrapping,
+      // but we don't actually need to implement mark/reset functionality.
+      // DicomInputStream only checks markSupported() but doesn't actually use mark/reset.
+    }
+
+    @Override
+    public void reset() throws IOException {
+      // Throw exception if reset is actually called (it shouldn't be).
+      // This is a safety measure - DicomInputStream doesn't use reset, but if
+      // something else tries to, we want to know about it.
+      throw new IOException("mark/reset not supported on TeeInputStream");
     }
 
     @Override
