@@ -57,7 +57,7 @@ public class DatabaseConfigService {
       "INSERT INTO dicom_study_destination (study_uid, dicomweb_destination_id) "
           + "SELECT ?, id FROM dicom_destination WHERE dicomweb_destination = ? "
           + "ON CONFLICT (study_uid) DO UPDATE "
-          + "SET dicomweb_destination_id = (SELECT id FROM dicom_destination WHERE dicomweb_destination = EXCLUDED.dicomweb_destination)";
+          + "SET dicomweb_destination_id = EXCLUDED.dicomweb_destination_id";
 
   /**
    * Creates a new DatabaseConfigService with the specified configuration.
