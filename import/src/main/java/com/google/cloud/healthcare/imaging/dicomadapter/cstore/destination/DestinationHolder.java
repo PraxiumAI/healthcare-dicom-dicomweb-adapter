@@ -14,6 +14,7 @@ public class DestinationHolder {
   private ImmutableList<AetDictionary.Aet> dicomDestinations;
   private CountingInputStream countingInputStream;
   private Attributes metadata;
+  private String tempFilePath;
 
   public DestinationHolder(InputStream destinationInputStream, IDicomWebClient defaultDestination) {
     this.countingInputStream = new CountingInputStream(destinationInputStream);
@@ -57,5 +58,13 @@ public class DestinationHolder {
 
   public void setMetadata(Attributes metadata) {
     this.metadata = metadata;
+  }
+
+  public String getTempFilePath() {
+    return tempFilePath;
+  }
+
+  public void setTempFilePath(String tempFilePath) {
+    this.tempFilePath = tempFilePath;
   }
 }

@@ -394,16 +394,23 @@ public class CStoreService extends BasicCStoreSCP {
       return;
     }
 
-    // Get metadata already read by DestinationClientFactory/DatabaseDestinationClientFactory
-    Attributes dataset = destinationHolder.getMetadata();
+    // Get temp file path - we'll read complete dataset from it
+    String tempFilePath = destinationHolder.getTempFilePath();
 
-    if (dataset != null) {
-      // PATH 1: Metadata already read - reuse them
-      // Add private tags to metadata
+    if (tempFilePath != null) {
+      // PATH 1: Read complete dataset from temp file (PDV stream without FMI)
+      // Open a NEW stream from temp file to avoid consuming the inputStream
+      Attributes complete;
+      try (java.io.FileInputStream fis = new java.io.FileInputStream(tempFilePath);
+           DicomInputStream dis = new DicomInputStream(fis, transferSyntax)) {
+        complete = dis.readDataset(-1, -1);  // Read ALL data including PixelData
+      }
+
+      // Add private tags to complete dataset
       for (ImportAdapter.PrivateTagConfig config : privateTagConfigs) {
         try {
           String value = resolveVariables(config.getValueTemplate(), association);
-          dataset.setString(config.getTag(), config.getVr(), value);
+          complete.setString(config.getTag(), config.getVr(), value);
         } catch (Exception e) {
           log.error("Failed to add private tag (0x" + Integer.toHexString(config.getTag()) + "): " + e.getMessage());
           throw new IOException("Failed to add private tag: " + e.getMessage(), e);
@@ -412,14 +419,13 @@ public class CStoreService extends BasicCStoreSCP {
 
       // Create FMI with modified metadata
       Attributes fmi = Attributes.createFileMetaInformation(
-          dataset.getString(Tag.SOPInstanceUID),
-          dataset.getString(Tag.SOPClassUID),
+          complete.getString(Tag.SOPInstanceUID),
+          complete.getString(Tag.SOPClassUID),
           transferSyntax);
 
-      // Write complete DICOM file with FMI + modified metadata + PixelData
+      // Write complete DICOM file: FMI + complete dataset with private tags
       DicomOutputStream dos = new DicomOutputStream(outputStream, UID.ExplicitVRLittleEndian);
-      dos.writeDataset(fmi, dataset);
-      StreamUtils.copy(inputStream, dos);
+      dos.writeDataset(fmi, complete);
       dos.finish();
 
     } else {

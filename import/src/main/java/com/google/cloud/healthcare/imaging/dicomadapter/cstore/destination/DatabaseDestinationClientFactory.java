@@ -25,6 +25,7 @@ import com.google.cloud.healthcare.StringUtil;
 import com.google.cloud.healthcare.imaging.dicomadapter.DatabaseConfigService;
 import com.google.cloud.healthcare.imaging.dicomadapter.cstore.DicomStreamUtil;
 import java.sql.SQLException;
+import java.io.IOException;
 import java.util.concurrent.ConcurrentHashMap;
 import org.dcm4che3.data.Attributes;
 import org.dcm4che3.data.Tag;
@@ -115,6 +116,7 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
       }
 
       // 4. Create stream for sending from temp file with auto-cleanup
+      // Stream is positioned at beginning - addPrivateTags() will handle parsing
       java.io.InputStream streamForSending = new java.io.FileInputStream(tempFile) {
         @Override
         public void close() throws java.io.IOException {
@@ -133,6 +135,7 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
         log.warn("StudyInstanceUID not found in DICOM attributes. Using default destination.");
         DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
         holder.setMetadata(attrs);
+        holder.setTempFilePath(tempFile.getAbsolutePath());
         return holder;
       }
 
@@ -145,6 +148,7 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
           DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
           holder.setSingleDestination(client);
           holder.setMetadata(attrs);
+          holder.setTempFilePath(tempFile.getAbsolutePath());
           return holder;
         }
 
@@ -168,12 +172,14 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
           DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
           holder.setSingleDestination(client);
           holder.setMetadata(attrs);
+          holder.setTempFilePath(tempFile.getAbsolutePath());
           return holder;
         }
 
         // Step 4: No database routing found, use default
         DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
         holder.setMetadata(attrs);
+        holder.setTempFilePath(tempFile.getAbsolutePath());
         return holder;
 
       } catch (SQLException e) {
@@ -182,6 +188,7 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
         // On database errors, fall back to default destination rather than failing the request
         DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
         holder.setMetadata(attrs);
+        holder.setTempFilePath(tempFile.getAbsolutePath());
         return holder;
       }
 
