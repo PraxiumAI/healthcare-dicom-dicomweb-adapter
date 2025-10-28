@@ -5,6 +5,7 @@ import com.google.cloud.healthcare.imaging.dicomadapter.AetDictionary;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.CountingInputStream;
 import java.io.InputStream;
+import org.dcm4che3.data.Attributes;
 
 public class DestinationHolder {
 
@@ -12,6 +13,7 @@ public class DestinationHolder {
   private ImmutableList<IDicomWebClient> healthcareDestinations;
   private ImmutableList<AetDictionary.Aet> dicomDestinations;
   private CountingInputStream countingInputStream;
+  private Attributes metadata;
 
   public DestinationHolder(InputStream destinationInputStream, IDicomWebClient defaultDestination) {
     this.countingInputStream = new CountingInputStream(destinationInputStream);
@@ -47,5 +49,13 @@ public class DestinationHolder {
 
   public ImmutableList<AetDictionary.Aet> getDicomDestinations() {
     return dicomDestinations;
+  }
+
+  public Attributes getMetadata() {
+    return metadata;
+  }
+
+  public void setMetadata(Attributes metadata) {
+    this.metadata = metadata;
   }
 }

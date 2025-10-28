@@ -163,7 +163,7 @@ public class CStoreService extends BasicCStoreSCP {
       // 2. Add private tags (if configured)
       if (!privateTagConfigs.isEmpty()) {
         processorList.add((inputStream, outputStream) ->
-          addPrivateTags(inputStream, outputStream, association, transferSyntax)
+          addPrivateTags(inputStream, outputStream, association, transferSyntax, destinationHolder)
         );
       }
 
@@ -373,103 +373,60 @@ public class CStoreService extends BasicCStoreSCP {
 
   /**
    * Adds configured private tags to the DICOM dataset.
+   * Reuses metadata already read by DestinationClientFactory to avoid double-reading.
    *
    * @param inputStream Input DICOM stream
    * @param outputStream Output DICOM stream with added tags
    * @param association DICOM association for variable resolution
    * @param transferSyntax Transfer syntax for output
+   * @param destinationHolder Holder containing pre-read metadata
    * @throws IOException if reading/writing fails
    */
   private void addPrivateTags(
       InputStream inputStream,
       OutputStream outputStream,
       Association association,
-      String transferSyntax) throws IOException {
+      String transferSyntax,
+      DestinationHolder destinationHolder) throws IOException {
 
     if (privateTagConfigs.isEmpty()) {
-      // No tags to add, just copy through
       StreamUtils.copy(inputStream, outputStream);
       return;
     }
 
-    log.debug("addPrivateTags: start, callingAET={}, calledAET={}, ts={}",
-        association.getAAssociateAC().getCallingAET(),
-        association.getAAssociateAC().getCalledAET(),
-        transferSyntax);
+    // Get metadata already read by DestinationClientFactory/DatabaseDestinationClientFactory
+    Attributes dataset = destinationHolder.getMetadata();
 
-    // Read metadata without loading large pixel data into memory
-    //
-    // SOLUTION: Buffer metadata using TeeInputStream + copy PixelData directly
-    // 1. Create ByteArrayOutputStream to buffer metadata as we read it
-    // 2. Wrap inputStream with TeeInputStream that writes to buffer
-    // 3. Read metadata through TeeInputStream WITHOUT BufferedInputStream
-    //    (BufferedInputStream would read ahead and buffer extra data!)
-    // 4. Add private tags to the metadata
-    // 5. Write modified metadata to output
-    // 6. Copy remaining stream (PixelData) directly without parsing
-
-    // 1. Create buffer for metadata (typically < 64KB for DICOM headers)
-    ByteArrayOutputStream metadataBuffer = new ByteArrayOutputStream();
-
-    // 2. Create TeeInputStream that writes everything it reads into the buffer
-    InputStream teeStream = new DicomStreamUtil.TeeInputStream(inputStream, metadataBuffer);
-
-    // 3. Read attributes from TeeInputStream
-    //    IMPORTANT: Do NOT wrap in BufferedInputStream here!
-    //    BufferedInputStream would read ahead and buffer data that doesn't get written to metadataBuffer
-    Attributes fmi;
-    Attributes dataset;
-    try (DicomInputStream dis = new DicomInputStream(teeStream, transferSyntax)) {
-      fmi = dis.readFileMetaInformation();
-      // Read only up to PixelData tag to avoid loading large pixel arrays
-      dataset = dis.readDataset(-1, Tag.PixelData);
-    } catch (IOException e) {
-      log.error("addPrivateTags: failed to read attributes (metaBuf={} bytes, ts={})",
-          metadataBuffer.size(), transferSyntax, e);
-      throw e;
-    }
-
-    if (log.isDebugEnabled()) {
-      String fmiTs = fmi != null ? fmi.getString(Tag.TransferSyntaxUID) : "<none>";
-      boolean hasPixelData = dataset != null && dataset.contains(Tag.PixelData);
-      log.debug("addPrivateTags: read ok (fmiTS={}, datasetTags={}, hasPixelData={}, metaBuf={} bytes)",
-          fmiTs, dataset != null ? dataset.size() : 0, hasPixelData, metadataBuffer.size());
-    }
-
-    // 4. Add all configured private tags
-    for (ImportAdapter.PrivateTagConfig config : privateTagConfigs) {
-      try {
-        String value = resolveVariables(config.getValueTemplate(), association);
-        dataset.setString(config.getTag(), config.getVr(), value);
-      } catch (Exception e) {
-        log.error("Failed to add private tag (0x" + Integer.toHexString(config.getTag()) + "): " + e.getMessage());
-        throw new IOException("Failed to add private tag: " + e.getMessage(), e);
+    if (dataset != null) {
+      // PATH 1: Metadata already read - reuse them
+      // Add private tags to metadata
+      for (ImportAdapter.PrivateTagConfig config : privateTagConfigs) {
+        try {
+          String value = resolveVariables(config.getValueTemplate(), association);
+          dataset.setString(config.getTag(), config.getVr(), value);
+        } catch (Exception e) {
+          log.error("Failed to add private tag (0x" + Integer.toHexString(config.getTag()) + "): " + e.getMessage());
+          throw new IOException("Failed to add private tag: " + e.getMessage(), e);
+        }
       }
+
+      // Create FMI with modified metadata
+      Attributes fmi = Attributes.createFileMetaInformation(
+          dataset.getString(Tag.SOPInstanceUID),
+          dataset.getString(Tag.SOPClassUID),
+          transferSyntax);
+
+      // Write complete DICOM file with FMI + modified metadata + PixelData
+      DicomOutputStream dos = new DicomOutputStream(outputStream, UID.ExplicitVRLittleEndian);
+      dos.writeDataset(fmi, dataset);
+      StreamUtils.copy(inputStream, dos);
+      dos.finish();
+
+    } else {
+      // PATH 2: Fallback - metadata not read (shouldn't happen with current code)
+      log.warn("addPrivateTags: Metadata not available, copying stream without modifications");
+      StreamUtils.copy(inputStream, outputStream);
     }
-
-    // 5. Write modified DICOM with proper transfer syntax handling
-    // Keep the original transfer syntax to ensure the appended PixelData element
-    // remains consistent with the dataset encoding that precedes it.
-    // Changing TS here (e.g., Implicit -> Explicit) would require re-encoding PixelData,
-    // which we intentionally avoid for streaming performance and memory safety.
-    String finalTransferSyntax = transferSyntax;
-
-    // Update FMI with the final transfer syntax
-    if (fmi != null) {
-      fmi.setString(Tag.TransferSyntaxUID, VR.UI, finalTransferSyntax);
-    }
-
-    // Write the modified metadata (file meta info + dataset with private tags)
-    DicomOutputStream dos = new DicomOutputStream(outputStream, finalTransferSyntax);
-    dos.writeDataset(fmi, dataset);
-    dos.flush();
-    log.debug("addPrivateTags: wrote dataset (finalTS={})", finalTransferSyntax);
-
-    // 6. Copy remaining stream (pixel data and anything after) without parsing
-    // This avoids loading large pixel arrays into memory
-    // inputStream continues from where TeeInputStream stopped (at PixelData)
-    StreamUtils.copy(inputStream, outputStream);
-    log.debug("addPrivateTags: copied remaining stream to output");
   }
 
   private void processStream(Executor underlyingExecutor, InputStream inputStream,

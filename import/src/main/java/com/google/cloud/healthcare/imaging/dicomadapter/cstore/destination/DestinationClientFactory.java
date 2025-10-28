@@ -33,12 +33,13 @@ public abstract class DestinationClientFactory implements IDestinationClientFact
   @Override
   public DestinationHolder create(String callingAet, String transferSyntax, InputStream inputStream) throws IOException {
     DestinationHolder destinationHolder;
-    
+
     if ((healthcareDestinations != null && !healthcareDestinations.isEmpty()) || dicomDestinationsNotEmpty) {
       DicomInputStream inDicomStream = createDicomInputStream(transferSyntax, inputStream);
       Attributes attrs = getFilteringAttributes(inDicomStream);
-      
+
       destinationHolder = new DestinationHolder(inDicomStream, defaultDicomWebClient);
+      destinationHolder.setMetadata(attrs);
       selectAndPutDestinationClients(destinationHolder, callingAet, attrs);
     } else {
       destinationHolder = new DestinationHolder(inputStream, defaultDicomWebClient);

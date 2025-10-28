@@ -89,7 +89,7 @@ public class DicomStreamUtil {
       // IMPORTANT: Use markReplayLimit (frozen at reset time), not markBufferLimit (grows during buffering)
       if (markBuffer != null && markBufferPos < markReplayLimit) {
         int b = markBuffer[markBufferPos++] & 0xFF;
-        log.debug("Read from markBuffer: pos={}/{}, byte={}", markBufferPos-1, markReplayLimit, b);
+        // log.debug("Read from markBuffer: pos={}/{}, byte={}", markBufferPos-1, markReplayLimit, b);
         // Data from buffer was already written to sink during initial read, don't write again
         return b;
       }
@@ -101,12 +101,12 @@ public class DicomStreamUtil {
         // If mark is active, buffer this byte
         if (markReadLimit > 0 && markBuffer != null && markBufferLimit < markBuffer.length) {
           markBuffer[markBufferLimit++] = (byte) b;
-          log.debug("Read from source and buffered: totalRead={}, markBufferLimit={}/{}", totalBytesRead, markBufferLimit, markBuffer.length);
+          // log.debug("Read from source and buffered: totalRead={}, markBufferLimit={}/{}", totalBytesRead, markBufferLimit, markBuffer.length);
         } else {
-          log.debug("Read from source (no buffering): totalRead={}, byte={}", totalBytesRead, b);
+          // log.debug("Read from source (no buffering): totalRead={}, byte={}", totalBytesRead, b);
         }
       } else {
-        log.debug("Read from source: EOF at totalRead={}", totalBytesRead);
+        // log.debug("Read from source: EOF at totalRead={}", totalBytesRead);
       }
       return b;
     }
@@ -120,7 +120,7 @@ public class DicomStreamUtil {
         int toRead = Math.min(len, available);
         System.arraycopy(markBuffer, markBufferPos, b, off, toRead);
         markBufferPos += toRead;
-        log.debug("Read {} bytes from markBuffer: pos={}/{}", toRead, markBufferPos, markReplayLimit);
+        // log.debug("Read {} bytes from markBuffer: pos={}/{}", toRead, markBufferPos, markReplayLimit);
         // Data from buffer was already written to sink during initial read, don't write again
         return toRead;
       }
@@ -135,17 +135,17 @@ public class DicomStreamUtil {
           if (toBuf > 0) {
             System.arraycopy(b, off, markBuffer, markBufferLimit, toBuf);
             markBufferLimit += toBuf;
-            log.debug("Read {} bytes from source, buffered {} bytes: totalRead={}, markBufferLimit={}/{}", n, toBuf, totalBytesRead, markBufferLimit, markBuffer.length);
+            // log.debug("Read {} bytes from source, buffered {} bytes: totalRead={}, markBufferLimit={}/{}", n, toBuf, totalBytesRead, markBufferLimit, markBuffer.length);
           } else {
-            log.debug("Read {} bytes from source (mark buffer full): totalRead={}, markBufferLimit={}/{}", n, totalBytesRead, markBufferLimit, markBuffer.length);
+            // log.debug("Read {} bytes from source (mark buffer full): totalRead={}, markBufferLimit={}/{}", n, totalBytesRead, markBufferLimit, markBuffer.length);
           }
         } else {
-          log.debug("Read {} bytes from source (no mark active): totalRead={}", n, totalBytesRead);
+          // log.debug("Read {} bytes from source (no mark active): totalRead={}", n, totalBytesRead);
         }
       } else if (n == 0) {
-        log.debug("Read 0 bytes from source: totalRead={}", totalBytesRead);
+        // log.debug("Read 0 bytes from source: totalRead={}", totalBytesRead);
       } else {
-        log.debug("Read from source: EOF at totalRead={}", totalBytesRead);
+        // log.debug("Read from source: EOF at totalRead={}", totalBytesRead);
       }
       return n;
     }
@@ -159,7 +159,7 @@ public class DicomStreamUtil {
     public void mark(int readlimit) {
       markCount++;
       markPosition = totalBytesRead;
-      log.debug("mark() called #{}: readlimit={}, position={}, prev markBufferLimit={}", markCount, readlimit, markPosition, markBufferLimit);
+      // log.debug("mark() called #{}: readlimit={}, position={}, prev markBufferLimit={}", markCount, readlimit, markPosition, markBufferLimit);
       // Allocate buffer for mark/reset support
       // DicomInputStream typically needs only a small buffer for transfer syntax detection
       markReadLimit = readlimit;
@@ -176,7 +176,7 @@ public class DicomStreamUtil {
         log.error("reset() called #{} but mark not set!", resetCount);
         throw new IOException("Mark not set");
       }
-      log.debug("reset() called #{}: rewinding to markPosition={}, markBufferLimit={}, currentPos={}", resetCount, markPosition, markBufferLimit, totalBytesRead);
+      // log.debug("reset() called #{}: rewinding to markPosition={}, markBufferLimit={}, currentPos={}", resetCount, markPosition, markBufferLimit, totalBytesRead);
       // Reset to beginning of mark buffer for re-reading
       // Don't clear markBuffer - it may be reset multiple times
       // IMPORTANT: Freeze markReplayLimit to current markBufferLimit
@@ -187,8 +187,10 @@ public class DicomStreamUtil {
 
     @Override
     public void close() throws IOException {
-      log.debug("close() called: totalBytesRead={}, sink size={}", totalBytesRead,
-          sink instanceof java.io.ByteArrayOutputStream ? ((java.io.ByteArrayOutputStream)sink).size() : "unknown");
+      // log.debug("close() called: totalBytesRead={}, sink size={}", totalBytesRead,
+      //     sink instanceof java.io.ByteArrayOutputStream ? ((java.io.ByteArrayOutputStream)sink).size() : "unknown");
+      // log.debug("close() stacktrace:", new Exception("Stack trace for TeeInputStream.close()"));
+
       // Do not close the underlying source here; callers manage stream lifecycle.
       // Flushing sink ensures buffered bytes are written when used with ByteArrayOutputStream.
       try {

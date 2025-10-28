@@ -81,90 +81,116 @@ public class DatabaseDestinationClientFactory implements IDestinationClientFacto
 
     // For database routing, we need StudyInstanceUID (0020,000D) from stream.
     //
-    // PROBLEM: PDVInputStream is a network stream that cannot be rewound (no mark/reset)
+    // PROBLEM: DicomInputStream.readDataset() consumes entire stream into internal buffers,
+    //          making streaming approaches (TeeInputStream + SequenceInputStream) infeasible.
     //
-    // SOLUTION: Buffer metadata using TeeInputStream + SequenceInputStream:
-    // 1. Create ByteArrayOutputStream to buffer metadata as we read it
-    // 2. Wrap inPdvStream with TeeInputStream that writes to buffer
-    // 3. Read metadata through TeeInputStream WITHOUT BufferedInputStream wrapper
-    //    (BufferedInputStream would buffer extra data that doesn't get written to buffer!)
-    // 4. Create SequenceInputStream(buffer + remaining stream) for upload
-    // 5. This ensures we can read metadata AND send complete file without race conditions
+    // SOLUTION: Use temporary file for buffering:
+    // 1. Copy entire inPdvStream to temporary file
+    // 2. Read metadata from file for routing
+    // 3. Create FileInputStream with auto-cleanup for upload
+    // 4. File is deleted when stream is closed
 
-    // 1. Create buffer for metadata (typically < 64KB for DICOM headers)
-    java.io.ByteArrayOutputStream metadataBuffer = new java.io.ByteArrayOutputStream();
-
-    // 2. Create TeeInputStream that writes everything it reads into the buffer
-    java.io.InputStream teeStream = new DicomStreamUtil.TeeInputStream(inPdvStream, metadataBuffer);
-
-    // 3. Read attributes from TeeInputStream
-    //    IMPORTANT: Do NOT wrap in BufferedInputStream here!
-    //    BufferedInputStream would read ahead and buffer data that doesn't get written to metadataBuffer
-    Attributes attrs;
-    String studyInstanceUID;
-    try (org.dcm4che3.io.DicomInputStream tempStream =
-        new org.dcm4che3.io.DicomInputStream(teeStream, transferSyntax)) {
-      attrs = tempStream.readDataset(-1, Tag.PixelData);
-      studyInstanceUID = attrs.getString(Tag.StudyInstanceUID);
-    }
-
-    // 4. Create "rewindable" stream for sending:
-    //    First replay buffered metadata, then continue with remaining stream (PixelData)
-    java.io.InputStream streamForSending = new java.io.SequenceInputStream(
-        new java.io.ByteArrayInputStream(metadataBuffer.toByteArray()),
-        inPdvStream // Continues from where TeeInputStream stopped (at PixelData)
-    );
-
-    if (studyInstanceUID == null || studyInstanceUID.isEmpty()) {
-      log.warn("StudyInstanceUID not found in DICOM attributes. Using default destination.");
-      return new DestinationHolder(streamForSending, defaultDicomWebClient);
-    }
+    // 1. Create temporary file
+    final java.io.File tempFile = java.io.File.createTempFile("dicom-routing-", ".dcm");
+    tempFile.deleteOnExit(); // Fallback cleanup on JVM shutdown
+    // log.debug("DatabaseDestinationClientFactory: Created temp file: {}", tempFile.getAbsolutePath());
 
     try {
-      // Step 1: Check study_storage table
-      String destination = databaseConfigService.getStorageForStudy(studyInstanceUID);
+      // 2. Copy entire stream to temporary file
+      try (java.io.FileOutputStream fos = new java.io.FileOutputStream(tempFile)) {
+        byte[] buffer = new byte[8192];
+        int bytesRead;
+        while ((bytesRead = inPdvStream.read(buffer)) != -1) {
+          fos.write(buffer, 0, bytesRead);
+        }
+      }
 
-      if (destination != null) {
-        log.debug("Found destination for study_uid={} in study_storage: {}",
-            studyInstanceUID, destination);
-        IDicomWebClient client = getOrCreateClient(destination);
+      // 3. Read metadata from temp file for routing
+      Attributes attrs;
+      String studyInstanceUID;
+      try (java.io.FileInputStream fis = new java.io.FileInputStream(tempFile);
+           org.dcm4che3.io.DicomInputStream dis = new org.dcm4che3.io.DicomInputStream(fis, transferSyntax)) {
+        attrs = dis.readDataset(-1, Tag.PixelData);
+        studyInstanceUID = attrs.getString(Tag.StudyInstanceUID);
+      }
+
+      // 4. Create stream for sending from temp file with auto-cleanup
+      java.io.InputStream streamForSending = new java.io.FileInputStream(tempFile) {
+        @Override
+        public void close() throws java.io.IOException {
+          try {
+            super.close();
+          } finally {
+            // Delete temp file when stream is closed
+            if (tempFile.exists()) {
+              tempFile.delete();
+            }
+          }
+        }
+      };
+
+      if (studyInstanceUID == null || studyInstanceUID.isEmpty()) {
+        log.warn("StudyInstanceUID not found in DICOM attributes. Using default destination.");
         DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
-        holder.setSingleDestination(client);
+        holder.setMetadata(attrs);
         return holder;
       }
 
-      // Step 2: Check aet_storage table
-      destination = databaseConfigService.getStorageForAet(callingAet);
+      try {
+        // Step 1: Check study_storage table
+        String destination = databaseConfigService.getStorageForStudy(studyInstanceUID);
 
-      if (destination != null) {
-        log.info("Found destination for aet={} in aet_storage: {}. Creating study mapping.",
-            callingAet, destination);
-
-        // Step 3: Persist the mapping to study_storage
-        try {
-          databaseConfigService.mapStudyToStorage(studyInstanceUID, destination);
-        } catch (SQLException e) {
-          // Log error but don't fail the request - we can still route to the destination
-          log.error("Failed to persist study_uid={} to storage mapping. Continuing with routing.",
-              studyInstanceUID, e);
+        if (destination != null) {
+          IDicomWebClient client = getOrCreateClient(destination);
+          DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
+          holder.setSingleDestination(client);
+          holder.setMetadata(attrs);
+          return holder;
         }
 
-        IDicomWebClient client = getOrCreateClient(destination);
+        // Step 2: Check aet_storage table
+        destination = databaseConfigService.getStorageForAet(callingAet);
+
+        if (destination != null) {
+          log.info("Found destination for aet={} in aet_storage: {}. Creating study mapping.",
+              callingAet, destination);
+
+          // Step 3: Persist the mapping to study_storage
+          try {
+            databaseConfigService.mapStudyToStorage(studyInstanceUID, destination);
+          } catch (SQLException e) {
+            // Log error but don't fail the request - we can still route to the destination
+            log.error("Failed to persist study_uid={} to storage mapping. Continuing with routing.",
+                studyInstanceUID, e);
+          }
+
+          IDicomWebClient client = getOrCreateClient(destination);
+          DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
+          holder.setSingleDestination(client);
+          holder.setMetadata(attrs);
+          return holder;
+        }
+
+        // Step 4: No database routing found, use default
         DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
-        holder.setSingleDestination(client);
+        holder.setMetadata(attrs);
+        return holder;
+
+      } catch (SQLException e) {
+        log.error("Database error during destination routing for study_uid={}, aet={}. " +
+            "Using default destination.", studyInstanceUID, callingAet, e);
+        // On database errors, fall back to default destination rather than failing the request
+        DestinationHolder holder = new DestinationHolder(streamForSending, defaultDicomWebClient);
+        holder.setMetadata(attrs);
         return holder;
       }
 
-      // Step 4: No database routing found, use default
-      log.debug("No database routing found for study_uid={}, aet={}. Using default destination.",
-          studyInstanceUID, callingAet);
-      return new DestinationHolder(streamForSending, defaultDicomWebClient);
-
-    } catch (SQLException e) {
-      log.error("Database error during destination routing for study_uid={}, aet={}. " +
-          "Using default destination.", studyInstanceUID, callingAet, e);
-      // On database errors, fall back to default destination rather than failing the request
-      return new DestinationHolder(streamForSending, defaultDicomWebClient);
+    } catch (Exception e) {
+      // Cleanup temp file on error
+      if (tempFile.exists()) {
+        tempFile.delete();
+      }
+      throw e;
     }
   }
 
