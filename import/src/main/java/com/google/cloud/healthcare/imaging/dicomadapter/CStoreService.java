@@ -18,6 +18,7 @@ import com.google.api.client.http.HttpResponseException;
 import com.google.cloud.healthcare.IDicomWebClient.DicomWebException;
 import com.google.cloud.healthcare.deid.redactor.DicomRedactor;
 import com.google.cloud.healthcare.imaging.dicomadapter.cstore.DicomStreamUtil;
+import com.google.cloud.healthcare.imaging.dicomadapter.cstore.SkipTagFilter;
 import com.google.cloud.healthcare.imaging.dicomadapter.cstore.destination.DestinationHolder;
 import com.google.cloud.healthcare.imaging.dicomadapter.cstore.destination.IDestinationClientFactory;
 import com.google.cloud.healthcare.imaging.dicomadapter.cstore.multipledest.IMultipleDestinationUploadService;
@@ -76,6 +77,7 @@ public class CStoreService extends BasicCStoreSCP {
   private final DicomRedactor redactor;
   private final String transcodeToSyntax;
   private final List<ImportAdapter.PrivateTagConfig> privateTagConfigs;
+  private final SkipTagFilter skipTagFilter;
   private final DatabaseConfigService databaseConfigService;
   private final boolean sentryEnabled;
 
@@ -84,6 +86,7 @@ public class CStoreService extends BasicCStoreSCP {
                 String transcodeToSyntax,
                 IMultipleDestinationUploadService multipleSendService,
                 List<ImportAdapter.PrivateTagConfig> privateTagConfigs,
+                SkipTagFilter skipTagFilter,
                 DatabaseConfigService databaseConfigService,
                 boolean sentryEnabled) {
     this.destinationClientFactory = destinationClientFactory;
@@ -91,6 +94,7 @@ public class CStoreService extends BasicCStoreSCP {
     this.transcodeToSyntax = transcodeToSyntax != null && transcodeToSyntax.length() > 0 ? transcodeToSyntax : null;
     this.multipleSendService = multipleSendService;
     this.privateTagConfigs = privateTagConfigs != null ? privateTagConfigs : new ArrayList<>();
+    this.skipTagFilter = skipTagFilter;
     this.databaseConfigService = databaseConfigService;
     this.sentryEnabled = sentryEnabled;
 
@@ -100,6 +104,10 @@ public class CStoreService extends BasicCStoreSCP {
 
     if(!this.privateTagConfigs.isEmpty()) {
       log.info("Private tags configured: " + this.privateTagConfigs.size() + " tags will be added during C-STORE");
+    }
+
+    if(this.skipTagFilter != null && !this.skipTagFilter.getConditions().isEmpty()) {
+      log.info("Skip filter configured: " + this.skipTagFilter.getConditions().size() + " conditions will skip instances during C-STORE");
     }
 
     if (log.isDebugEnabled()) {
@@ -150,6 +158,51 @@ public class CStoreService extends BasicCStoreSCP {
 
       DestinationHolder destinationHolder =
           destinationClientFactory.create(association.getAAssociateAC().getCallingAET(), transferSyntax, inPdvStream);
+
+      // Check if instance should be skipped based on tag values
+      if (skipTagFilter != null) {
+        // Create combined attributes with both command (sopClassUID) and dataset metadata
+        Attributes combinedAttrs = new Attributes();
+
+        // Add SOP Class UID from command
+        if (sopClassUID != null) {
+          combinedAttrs.setString(Tag.SOPClassUID, VR.UI, sopClassUID);
+        }
+
+        // Add dataset attributes if available
+        if (destinationHolder.getMetadata() != null) {
+          combinedAttrs.addAll(destinationHolder.getMetadata());
+        }
+
+        // Check if should skip
+        if (skipTagFilter.shouldSkip(combinedAttrs)) {
+          // Extract SOP Instance UID for logging
+          String skipSopInstanceUID = sopInstanceUID != null ? sopInstanceUID : "unknown";
+
+          // Build list of matched conditions for detailed logging
+          List<String> matchedConditions = new ArrayList<>();
+          for (SkipTagFilter.SkipCondition condition : skipTagFilter.getConditions()) {
+            String actualValue = combinedAttrs.getString(condition.getTag());
+            if (actualValue != null && actualValue.equals(condition.getExpectedValue())) {
+              matchedConditions.add(String.format("%s=%s",
+                  org.dcm4che3.util.TagUtils.toHexString(condition.getTag()),
+                  condition.getExpectedValue()));
+            }
+          }
+
+          // Log skip with details
+          log.info("Skipping instance - SOPInstanceUID: {}, conditions: {}",
+              skipSopInstanceUID,
+              String.join(", ", matchedConditions));
+
+          // Increment monitoring counter
+          MonitoringService.addEvent(Event.CSTORE_SKIPPED);
+
+          // Return success to client (instance not stored but operation succeeded)
+          response.setInt(Tag.Status, VR.US, Status.Success);
+          return;
+        }
+      }
 
       final CountingInputStream countingStream = destinationHolder.getCountingInputStream();
 

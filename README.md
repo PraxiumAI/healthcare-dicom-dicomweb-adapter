@@ -342,6 +342,90 @@ Private tags are added **after** DICOM Redaction (if configured) but **before** 
 2. Private tags are preserved during transfer syntax conversion
 3. All processing errors are reported back to the sender
 
+## Skipping DICOM Instances
+
+The Import Adapter can selectively skip storing DICOM instances based on tag values while still returning success to the sender. This is useful for filtering out specific types of files (such as RAW mammography images) that should not be stored in the viewing system.
+
+### Configuration
+
+Use the `--skip-if-tag` flag (can be specified multiple times):
+
+```bash
+--skip-if-tag="GGGGEEEE=VALUE"
+```
+
+### Format
+
+- **`GGGGEEEE`** - DICOM tag in 8-digit hexadecimal format (no separators)
+- **`VALUE`** - Exact string value to match
+
+### Behavior
+
+When a DICOM instance matches any skip condition:
+- The instance is **not stored** to the DICOMweb destination
+- A **success response** (status 0x0000) is returned to the sender
+- The skip is **logged** at INFO level with SOP Instance UID and matched conditions
+- A **monitoring counter** (`cstore_skipped`) is incremented
+
+### Use Cases
+
+**Filtering RAW Mammography Images:**
+RAW DICOM files contain unprocessed sensor data and are not intended for viewing. They can be identified by their SOP Class UID:
+
+```bash
+--skip-if-tag="00080016=1.2.840.10008.5.1.4.1.1.1.2.1"
+```
+
+**Multiple Conditions (OR logic):**
+Skip instances matching ANY of the specified conditions:
+
+```bash
+--skip-if-tag="00080016=1.2.840.10008.5.1.4.1.1.1.2.1" \
+--skip-if-tag="00080068=FOR PROCESSING"
+```
+
+### Example Usage
+
+```bash
+java -jar import-adapter.jar \
+  --dimse_aet=MY_AET \
+  --dimse_port=11112 \
+  --dicomweb_address=https://healthcare.googleapis.com/v1/projects/my-project/locations/us-central1/datasets/my-dataset/dicomStores/my-store/dicomWeb \
+  --skip-if-tag="00080016=1.2.840.10008.5.1.4.1.1.1.2.1" \
+  --skip-if-tag="00080068=FOR PROCESSING"
+```
+
+### Common DICOM Tags
+
+| Tag | Name | Example Values |
+|-----|------|----------------|
+| `00080016` | SOP Class UID | `1.2.840.10008.5.1.4.1.1.1.2.1` (RAW Mammography) |
+| `00080068` | Presentation Intent Type | `FOR PROCESSING`, `FOR PRESENTATION` |
+
+### Monitoring
+
+Skipped instances are tracked with the `cstore_skipped` metric in Cloud Monitoring. This allows you to monitor how many files are being filtered.
+
+### Troubleshooting
+
+**Files still being stored:**
+- Verify tag format is exactly 8 hexadecimal digits (no spaces, parentheses, or commas)
+- Check that the value matches exactly (case-sensitive)
+- Enable `--verbose` logging to see tag comparison details
+
+**Adapter startup errors:**
+- Invalid tag format will cause startup failure with a clear error message
+- Tags must be exactly 8 hexadecimal characters
+
+### Processing Order
+
+Skip check occurs **early** in the C-STORE pipeline:
+1. Instance metadata is parsed
+2. **Skip filter is evaluated** ← happens here
+3. If not skipped: redaction, private tags, transcoding, storage
+
+This ensures minimal processing overhead for skipped files.
+
 ## Deployment using Kubernetes
 
 The adapters can be deployed to Google Cloud Platform using [GKE] (https://cloud.google.com/kubernetes-engine/). We have published prebuilt Docker images for the both adapters to [Google Container Registry](https://cloud.google.com/container-registry/).

@@ -30,6 +30,7 @@ import com.google.cloud.healthcare.deid.redactor.protos.DicomConfigProtos;
 import com.google.cloud.healthcare.deid.redactor.protos.DicomConfigProtos.DicomConfig;
 import com.google.cloud.healthcare.deid.redactor.protos.DicomConfigProtos.DicomConfig.TagFilterProfile;
 import com.google.cloud.healthcare.imaging.dicomadapter.cmove.CMoveSenderFactory;
+import com.google.cloud.healthcare.imaging.dicomadapter.cstore.SkipTagFilter;
 import com.google.cloud.healthcare.imaging.dicomadapter.cstore.backup.BackupUploadService;
 import com.google.cloud.healthcare.imaging.dicomadapter.cstore.backup.DelayCalculator;
 import com.google.cloud.healthcare.imaging.dicomadapter.cstore.backup.GcpBackupUploader;
@@ -185,6 +186,8 @@ public class ImportAdapter {
 
     List<PrivateTagConfig> privateTagConfigs = validateAndParsePrivateTags(flags.addPrivateTags);
 
+    SkipTagFilter skipTagFilter = parseSkipIfTagFlags(flags.skipIfTag);
+
     BackupUploadService backupUploadService = configureBackupUploadService(flags, credentials);
 
     IDestinationClientFactory destinationClientFactory;
@@ -208,7 +211,8 @@ public class ImportAdapter {
 
     CStoreService cStoreService =
         new CStoreService(destinationClientFactory, redactor, flags.transcodeToSyntax,
-            multipleDestinationSendService, privateTagConfigs, databaseConfigService, sentryEnabled);
+            multipleDestinationSendService, privateTagConfigs, skipTagFilter,
+            databaseConfigService, sentryEnabled);
     serviceRegistry.addDicomService(cStoreService);
 
     // Handle C-FIND
@@ -452,6 +456,55 @@ public class ImportAdapter {
     }
 
     return configs;
+  }
+
+  /**
+   * Parses skip-if-tag configurations from command line flags.
+   *
+   * @param skipIfTagFlags List of tag specifications in format GGGGEEEE=VALUE
+   * @return SkipTagFilter configured with the parsed conditions, or null if no conditions
+   * @throws IllegalArgumentException if validation fails
+   */
+  private static SkipTagFilter parseSkipIfTagFlags(List<String> skipIfTagFlags) {
+    if (skipIfTagFlags == null || skipIfTagFlags.isEmpty()) {
+      return null;
+    }
+
+    List<SkipTagFilter.SkipCondition> conditions = new ArrayList<>();
+
+    for (String skipIfTag : skipIfTagFlags) {
+      // Split by first '=' only
+      String[] parts = skipIfTag.split("=", 2);
+      if (parts.length != 2) {
+        System.err.println("ERROR: Invalid skip-if-tag format: " + skipIfTag);
+        System.err.println("Expected format: GGGGEEEE=VALUE");
+        System.err.println("Example: 00080016=1.2.840.10008.5.1.4.1.1.1.2.1");
+        System.exit(1);
+      }
+
+      String tagStr = parts[0].trim();
+      String value = parts[1].trim();
+
+      // Validate tag format (8 hex digits)
+      if (!tagStr.matches("[0-9A-Fa-f]{8}")) {
+        System.err.println("ERROR: Invalid tag format: " + tagStr);
+        System.err.println("Tag must be 8 hexadecimal digits (GGGGEEEE)");
+        System.err.println("Example: 00080016");
+        System.exit(1);
+      }
+
+      // Parse tag as integer
+      int tag = Integer.parseInt(tagStr, 16);
+
+      // Create condition and add to list
+      conditions.add(new SkipTagFilter.SkipCondition(tag, value));
+
+      // Log the condition
+      log.info("Skip condition registered: tag={} value={}",
+          org.dcm4che3.util.TagUtils.toHexString(tag), value);
+    }
+
+    return new SkipTagFilter(conditions);
   }
 
   private static ImmutableList<Pair<DestinationFilter, IDicomWebClient>> configureDestinationMap(

@@ -299,6 +299,16 @@ public class Flags {
       description = "Sentry DSN for error reporting and monitoring.")
   String sentryDsn = "";
 
+  @Parameter(
+      names = {"--skip-if-tag"},
+      description =
+          "Skip storing DICOM instances that match tag=value condition. "
+              + "Format: GGGGEEEE=VALUE (e.g., 00080016=1.2.840.10008.5.1.4.1.1.1.2.1). "
+              + "Can be specified multiple times.",
+      variableArity = true,
+      splitter = NoSplitter.class)
+  List<String> skipIfTag = new ArrayList<>();
+
   public Flags() {
   }
 }

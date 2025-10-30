@@ -18,6 +18,7 @@ public enum Event implements IMonitoringEvent {
   STARTED(Constants.prefix + "started"),
 
   CSTORE_REQUEST(Constants.prefix + "cstore_requests"),
+  CSTORE_SKIPPED(Constants.prefix + "cstore_skipped"),
   CSTORE_ERROR(Constants.prefix + "cstore_errors"),
   CSTORE_BACKUP_ERROR(Constants.prefix + "cstore_backup_errors"),
   CSTORE_BYTES(Constants.prefix + "cstore_bytes"),

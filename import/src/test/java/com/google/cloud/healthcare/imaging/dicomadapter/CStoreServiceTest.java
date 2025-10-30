@@ -159,6 +159,7 @@ public final class CStoreServiceTest {
             transcodeToSyntax,
             multipleDestinationSendService,
             Collections.emptyList(),
+            null, // skipTagFilter null for unit tests
             null, // DatabaseConfigService null for unit tests
             false); // sentryEnabled
 
@@ -897,6 +898,7 @@ public final class CStoreServiceTest {
             null,
             null,
             Collections.emptyList(),
+            null, // skipTagFilter null for unit tests
             databaseConfigService, // Pass DatabaseConfigService
             false); // sentryEnabled
 
